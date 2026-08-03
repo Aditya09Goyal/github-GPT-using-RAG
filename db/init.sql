@@ -1,16 +1,22 @@
-
 CREATE EXTENSION IF NOT EXISTS vector;
 
-CREATE TABLE IF NOT EXISTS document_chunks (
+-- Feature 1: query logs
+CREATE TABLE IF NOT EXISTS query_logs (
     id SERIAL PRIMARY KEY,
     repo_name TEXT NOT NULL,
-    file_path TEXT NOT NULL,
-    chunk_text TEXT NOT NULL,
-    is_code BOOLEAN DEFAULT FALSE,
-    embedding VECTOR(256),  -- matches your embedder's dimensions=256
+    query TEXT NOT NULL,
+    answer TEXT,
+    latency_ms INTEGER,
     created_at TIMESTAMP DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_repo_name ON document_chunks (repo_name);
-CREATE INDEX IF NOT EXISTS idx_embedding ON document_chunks
-    USING hnsw (embedding vector_cosine_ops);
+-- Feature 1: conversation sessions
+CREATE TABLE IF NOT EXISTS conversations (
+    id SERIAL PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    repo_name TEXT NOT NULL,
+    role TEXT NOT NULL,
+    content TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_session ON conversations (session_id);
