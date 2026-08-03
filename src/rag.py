@@ -1,201 +1,120 @@
-from typing import Any, List
-from uuid import uuid4
-
-import adalflow as adal
-from adalflow.core.types import (
-    Conversation,
-    DialogTurn,
-    UserQuery,
-    AssistantResponse,
+import os
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_classic.retrievers import (
+    EnsembleRetriever,
+    ContextualCompressionRetriever,
 )
-from adalflow.components.retriever.faiss_retriever import FAISSRetriever
-from adalflow.components.data_process import (
-    RetrieverOutputToContextStr,
-)
-from adalflow.core.component import DataComponent
+from langchain_community.retrievers import BM25Retriever
+from langchain_classic.retrievers.document_compressors import CrossEncoderReranker
+from langchain_community.cross_encoders import HuggingFaceCrossEncoder
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
 from config import configs
 from src.data_pipeline import DatabaseManager
-from adalflow.utils import printc
+from src.vector_store import get_vector_store
+
+SYSTEM_PROMPT = """You are a code assistant which answers user questions about a GitHub repo.
+You will receive a user query, relevant context, and past conversation history.
+Think step by step and cite file paths where relevant."""
+
+PROMPT = ChatPromptTemplate.from_messages(
+    [
+        ("system", SYSTEM_PROMPT),
+        (
+            "human",
+            "Conversation history:\n{history}\n\nContext:\n{context}\n\nQuestion: {question}",
+        ),
+    ]
+)
 
 
-class Memory(DataComponent):
-    """Simple conversation management with a list of dialog turns."""
-
-    def __init__(self):
-        super().__init__()
-        self.current_conversation = Conversation()
-
-    def call(self) -> List[DialogTurn]:
-
-        all_dialog_turns = self.current_conversation.dialog_turns
-
-        return all_dialog_turns
-
-    def add_dialog_turn(self, user_query: str, assistant_response: str):
-        dialog_turn = DialogTurn(
-            id=str(uuid4()),
-            user_query=UserQuery(query_str=user_query),
-            assistant_response=AssistantResponse(response_str=assistant_response),
-        )
-
-        self.current_conversation.append_dialog_turn(dialog_turn)
-
-
-system_prompt = r"""
-You are a code assistant which answer's user question on a Github Repo. 
-You will receive user query, relevant context, and past conversation history.
-Think step by step."""
-
-# history is a list of dialog turns
-RAG_TEMPLATE = r"""<START_OF_SYS_PROMPT>
-{{system_prompt}}
-{{output_format_str}}
-<END_OF_SYS_PROMPT>
-{# OrderedDict of DialogTurn #}
-{% if conversation_history %}
-<START_OF_CONVERSATION_HISTORY>
-{% for key, dialog_turn in conversation_history.items() %}
-{{key}}.
-User: {{dialog_turn.user_query.query_str}}
-You: {{dialog_turn.assistant_response.response_str}}
-{% endfor %}
-<END_OF_CONVERSATION_HISTORY>
-{% endif %}
-{% if contexts %}
-<START_OF_CONTEXT>
-{% for context in contexts %}
-{{loop.index }}.
-File Path: {{context.meta_data.get('file_path', 'unknown')}}
-Content: {{context.text}}
-{% endfor %}
-<END_OF_CONTEXT>
-{% endif %}
-<START_OF_USER_PROMPT>
-{{input_str}}
-<END_OF_USER_PROMPT>
-"""
-
-from dataclasses import dataclass, field
-
-
-@dataclass
-class RAGAnswer(adal.DataClass):
-    rationale: str = field(default="", metadata={"desc": "Rationale for the answer."})
-    answer: str = field(default="", metadata={"desc": "Answer to the user query."})
-
-    __output_fields__ = ["rationale", "answer"]
-
-
-class RAG(adal.Component):
-    __doc__ = """RAG with one repo.
-    If you want to load a new repo. You need to call prepare_retriever(repo_url_or_path) first."""
+class RAG:
+    """RAG over one repo at a time, with hybrid retrieval + reranking, backed by Postgres/pgvector."""
 
     def __init__(self):
-
-        super().__init__()
-
-        # Initialize embedder, generator, and db_manager
-        self.memory = Memory()
-
-        self.embedder = adal.Embedder(
-            model_client=configs["embedder"]["model_client"](),
-            model_kwargs=configs["embedder"]["model_kwargs"],
-        )
-
-        self.initialize_db_manager()
-
-        # Get the appropriate prompt template
-        data_parser = adal.DataClassParser(data_class=RAGAnswer, return_data_class=True)
-
-        self.generator = adal.Generator(
-            template=RAG_TEMPLATE,
-            prompt_kwargs={
-                "output_format_str": data_parser.get_output_format_str(),
-                "conversation_history": self.memory(),
-                "system_prompt": system_prompt,
-                "contexts": None,
-            },
-            model_client=configs["generator"]["model_client"](),
-            model_kwargs=configs["generator"]["model_kwargs"],
-            output_processors=data_parser,
-        )
-
-    def initialize_db_manager(self):
         self.db_manager = DatabaseManager()
-        self.transformed_docs = []
+        self.repo_name = None
+        self.llm = ChatGoogleGenerativeAI(
+            model=configs["chat_model"], temperature=configs["temperature"]
+        )
+        self.history = []
+        self.retriever = None
 
     def prepare_retriever(self, repo_url_or_path: str):
-        r"""Run prepare_retriever once for each repo."""
-        self.initialize_db_manager()
-        self.transformed_docs = self.db_manager.prepare_database(repo_url_or_path)
-        print(f"len(self.transformed_docs): {len(self.transformed_docs)}")
-        self.retriever = FAISSRetriever(
-            **configs["retriever"],
-            embedder=self.embedder,
-            documents=self.transformed_docs,
-            document_map_func=lambda doc: doc.vector,
+        self.db_manager.prepare_database(repo_url_or_path)
+        self.repo_name = self.db_manager.repo_name
+        self.history = []
+
+        store = get_vector_store(self.repo_name)
+        vector_retriever = store.as_retriever(search_kwargs={"k": configs["top_k"]})
+
+        from src.vector_store import get_all_documents
+
+        all_docs = get_all_documents(self.repo_name)
+        bm25_retriever = BM25Retriever.from_documents(all_docs)
+        bm25_retriever.k = configs["top_k"]
+
+        hybrid_retriever = EnsembleRetriever(
+            retrievers=[vector_retriever, bm25_retriever],
+            weights=[0.5, 0.5],
         )
 
-    def call(self, query: str) -> Any:
-
-        retrieved_documents = self.retriever(query)
-
-        # fill in the document
-        retrieved_documents[0].documents = [
-            self.transformed_docs[doc_index]
-            for doc_index in retrieved_documents[0].doc_indices
-        ]
-
-        printc(f"retrieved_documents: {retrieved_documents[0].documents}")
-        printc(f"memory: {self.memory()}")
-
-        prompt_kwargs = {
-            "input_str": query,
-            "contexts": retrieved_documents[0].documents,
-            "conversation_history": self.memory(),
-        }
-        response = self.generator(
-            prompt_kwargs=prompt_kwargs,
+        cross_encoder = HuggingFaceCrossEncoder(
+            model_name="cross-encoder/ms-marco-MiniLM-L-6-v2"
+        )
+        reranker = CrossEncoderReranker(
+            model=cross_encoder, top_n=configs["rerank_top_k"]
+        )
+        self.retriever = ContextualCompressionRetriever(
+            base_compressor=reranker,
+            base_retriever=hybrid_retriever,
         )
 
-        # for debug
-        prompt_str = self.generator.get_prompt(**prompt_kwargs)
-        printc(f"prompt_str: {prompt_str}")
+    def _format_history(self):
+        return "\n".join(f"User: {u}\nAssistant: {a}" for u, a in self.history[-5:])
 
-        final_response = response.data
+    def _format_context(self, docs):
+        return "\n\n".join(
+            f"[{d.metadata.get('file_path', 'unknown')}]\n{d.page_content}"
+            for d in docs
+        )
 
-        self.memory.add_dialog_turn(user_query=query, assistant_response=final_response)
+    def call(self, query: str):
+        docs = self.retriever.invoke(query)
+        context = self._format_context(docs)
+        history_str = self._format_history()
 
-        return final_response, retrieved_documents
+        chain = PROMPT | self.llm | StrOutputParser()
+        answer = chain.invoke(
+            {"question": query, "context": context, "history": history_str}
+        )
+
+        self.history.append((query, answer))
+        return answer, docs
+
+    def call_stream(self, query: str):
+        docs = self.retriever.invoke(query)
+        context = self._format_context(docs)
+        history_str = self._format_history()
+
+        chain = PROMPT | self.llm | StrOutputParser()
+        full_text = ""
+        for chunk in chain.stream(
+            {"question": query, "context": context, "history": history_str}
+        ):
+            full_text += chunk
+            yield chunk
+        self.history.append((query, full_text))
 
 
 if __name__ == "__main__":
-    from adalflow.utils import get_logger
-
-    adal.setup_env()
-    # repo_url = "https://github.com/SylphAI-Inc/AdalFlow"
-    repo_url = "https://github.com/SylphAI-Inc/GithubChat"
+    repo_url = "https://github.com/Aditya09Goyal/github-GPT-using-RAG"
     rag = RAG()
     rag.prepare_retriever(repo_url)
-    print(
-        f"RAG component initialized for repo: {repo_url}. Type your query below or type 'exit' to quit."
-    )
-
+    print(f"RAG ready for {repo_url}. Type 'exit' to quit.")
     while True:
-        # Get user input
-
-        query = input("Enter your query (or type 'exit' to stop): ")
-
-        # Exit condition
-        if query.lower() in ["exit", "quit", "stop"]:
-            print("Exiting RAG component. Goodbye!")
+        query = input("Query: ")
+        if query.lower() in ["exit", "quit"]:
             break
-
-        # Process the query
-        try:
-            response, retrieved_documents = rag(query)
-            rag.memory.add_dialog_turn(user_query=query, assistant_response=response)
-            print(f"\nResponse:\n{response}\n")
-            print(f"Retrieved Documents:\n{retrieved_documents}\n")
-        except Exception as e:
-            print(f"An error occurred while processing the query: {e}")
+        answer, docs = rag.call(query)
+        print(f"\nAnswer:\n{answer}\n")
