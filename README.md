@@ -1,107 +1,99 @@
-# GithubChat
+# 🧭 CodeCompass - GitHub Repo Chat
 
-A RAG assistant to allow you to chat with any github repo. 
-Learn fast. The default repo is AdalFlow github repo.
+![Hero](assets/hero.svg)
 
-[![Watch the video](https://img.youtube.com/vi/PvZTSmTK8b0/maxresdefault.jpg)](https://youtu.be/PvZTSmTK8b0)
-*Click the image above to watch the demo video*
+CodeCompass turns a GitHub repository into an interactive, searchable knowledge base. Add a public repo, index it locally with embeddings (Chroma), and chat with an LLM grounded on real files from that repo.
 
+🔒 Privacy‑first • 🎯 Repo‑scoped answers • 💾 Local vector store • 🔖 Clear citations
 
+---
 
 ## Project Structure
+
 ```
-.
-├── frontend/           # React frontend application
-├── src/                # Python backend code
-├── api.py              # FastAPI server
-├── app.py              # Streamlit application
-└── pyproject.toml      # Python dependencies
-```
-
-## Backend Setup
-
-1. Install dependencies:
-```bash
-poetry install
-```
-
-2. Set up OpenAI API key:
-
-Create a `.streamlit/secrets.toml` file in your project root:
-```bash
-mkdir -p .streamlit
-touch .streamlit/secrets.toml
-```
-
-Add your OpenAI API key to `.streamlit/secrets.toml`:
-```toml
-OPENAI_API_KEY = "your-openai-api-key-here"
-```
-
-## Running the Applications
-
-### Streamlit UI
-Run the streamlit app:
-```bash
-poetry run streamlit run app.py
+backend/
+├── app/
+│   ├── __init__.py
+│   ├── main.py
+│   ├── core/
+│   │   ├── config.py
+│   │   └── logging.py
+│   ├── api/
+│   │   ├── __init__.py
+│   │   ├── routes_repo.py
+│   │   └── routes_chat.py
+│   ├── schemas/
+│   │   ├── repo.py
+│   │   └── chat.py
+│   ├── services/
+│   │   ├── github_loader.py
+│   │   ├── chunker.py
+│   │   ├── embeddings.py
+│   │   ├── vectorstore.py
+│   │   ├── retriever.py
+│   │   └── rag_chain.py
+│   └── db/
+│       └── chroma/
+├── data/
+│   └── repos/
+├── .env.example
+├── .gitignore
+├── pyproject.toml
+└── README.md
 ```
 
-### FastAPI Backend
-Run the API server:
-```bash
-poetry run uvicorn api:app --reload
+---
+
+## ✨ Highlights
+
+- Repo‑scoped conversational search - answers stay focused on the repo you select
+- Source grounding - responses reference retrieved passages and files
+- Persistent index - once indexed, the repo remains searchable
+- Simple ingestion - accepts `owner/repo` or full GitHub URLs; normalization prevents duplicates
+
+---
+
+## 📸 Screenshots
+
+![Home UI](assets/home.png)
+![Analyzing](assets/analyzing.png)
+![Chat UI](assets/chat.png)
+
+---
+
+## 🏗️ Architecture
+
 ```
-The API will be available at http://localhost:8000
-
-### React Frontend
-1. Navigate to the frontend directory:
-```bash
-cd frontend
-```
-
-2. Install Node.js dependencies:
-```bash
-pnpm install
-```
-
-
-3. Start the development server:
-```bash
-pnpm run dev
-```
-The frontend will be available at http://localhost:3000
-
-## API Endpoints
-
-### POST /query
-Analyzes a GitHub repository based on a query.
-```json
-// Request
-{
-  "repo_url": "https://github.com/username/repo",
-  "query": "What does this repository do?"
-}
-
-// Response
-{
-  "rationale": "Analysis rationale...",
-  "answer": "Detailed answer...",
-  "contexts": [...]
-}
+React (Vite + Tailwind)
+       ↕
+Flask REST API
+       ↕
+Embedchain (ingest + retrieve)
+       ↕               ↘
+   Chroma (vectors)   Groq LLM
 ```
 
-## ROADMAP
-- [x] Clearly structured RAG that can prepare a repo, persit from reloading, and answer questions.
-  - `DatabaseManager` in `src/data_pipeline.py` to manage the database.
-  - `RAG` class in `src/rag.py` to manage the whole RAG lifecycle.
+---
 
-### On the RAG backend
-- [ ] Conditional retrieval. Sometimes users just want to clarify a past conversation, no extra context needed.
-- [ ] Create an evaluation dataset  
-- [ ] Evaluate the RAG performance on the dataset  
-- [ ] Auto-optimize the RAG model
+## 🛠️ Technical notes
 
-### On the React frontend
+- Embeddings: sentence‑transformers `all‑MiniLM‑L6‑v2` (fast and compact)
+- Vector DB: Chroma persisted under `backend/db` for local, fast retrieval
+- LLM: Groq (configurable). Prompt encourages concise, source‑grounded answers
+- Metadata: each chunk stores `github_repo`, `file_path`, `chunk_index` for precise citations
 
-- [ ] Support the display of the whole conversation history instead of just the last message.
-- [ ] Support the management of multiple conversations.
+---
+
+## 🧰 Troubleshooting
+
+- 401/403 from LLM → check `GROQ_API_KEY` in `backend/.env`, restart Flask
+- Cannot add repo → ensure it’s a public GitHub repository or provide a `GITHUB_TOKEN`
+
+---
+
+## 🗺️ Roadmap
+
+- File/line citations with clickable open‑in‑editor behavior
+- Partial/continuous indexing for very large repos
+- Answer streaming UI for progressive responses
+- Docker images and a simple hosted deployment option
