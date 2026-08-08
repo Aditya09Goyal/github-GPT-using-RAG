@@ -17,6 +17,8 @@ ALLOWED_EXTENSIONS = {
     ".html", ".css",
 }
 
+ALLOWED_NO_EXTENSION_NAMES = {"README", "LICENSE", "Dockerfile", "Makefile"}
+
 # Folders to skip entirely while walking the repo
 IGNORED_DIRS = {
     ".git", "node_modules", "venv", "__pycache__",
@@ -58,7 +60,7 @@ def collect_files(repo_path: Path) -> list[Path]:
         if any(ignored in path.parts for ignored in IGNORED_DIRS):
             continue
 
-        if path.suffix not in ALLOWED_EXTENSIONS:
+        if path.suffix not in ALLOWED_EXTENSIONS and path.name not in ALLOWED_NO_EXTENSION_NAMES:
             continue
 
         collected.append(path)
