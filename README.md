@@ -1,4 +1,4 @@
-# 🧭 CodeCompass - GitHub Repo Chat
+# 🧭 GithubGPT - GitHub Repo Chat
 
 ![Hero](assets/hero.svg)
 
@@ -66,28 +66,17 @@ backend/
 ```
 React (Vite + Tailwind)
        ↕
-Flask REST API
+FastAPT REST API
        ↕
 Embedchain (ingest + retrieve)
        ↕               ↘
-   Chroma (vectors)   Groq LLM
+   Chroma (vectors)   Gemini LLM
 ```
 
 ---
+## Design Choices
 
-## 🛠️ Technical notes
-
-- Embeddings: sentence‑transformers `all‑MiniLM‑L6‑v2` (fast and compact)
-- Vector DB: Chroma persisted under `backend/db` for local, fast retrieval
-- LLM: Groq (configurable). Prompt encourages concise, source‑grounded answers
-- Metadata: each chunk stores `github_repo`, `file_path`, `chunk_index` for precise citations
-
----
-
-## 🧰 Troubleshooting
-
-- 401/403 from LLM → check `GROQ_API_KEY` in `backend/.env`, restart Flask
-- Cannot add repo → ensure it’s a public GitHub repository or provide a `GITHUB_TOKEN`
+In ```app/services/embeddings.py```, ```normalize_embeddings=True``` is a small but important detail — it scales every vector to unit length, so when we later compare vectors for similarity, the comparison is purely about direction (meaning) rather than being skewed by magnitude (which has nothing to do with semantic similarity).
 
 ---
 
