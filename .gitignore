@@ -1,4 +1,5 @@
 .env
+data/
 
 # Streamlit secrets
 .streamlit/secrets.toml
@@ -42,6 +43,3 @@ ENV/
 .DS_Store
 Thumbs.db
 __pycache__/
-
-# ignore adalflow cache
-/adalflow
