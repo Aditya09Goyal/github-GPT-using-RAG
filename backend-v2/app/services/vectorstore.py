@@ -49,3 +49,12 @@ def add_chunks_to_store(chunks: list[Chunk], collection_name: str) -> None:
     logger.info(f"Adding {len(documents)} documents to collection '{collection_name}'")
     store.add_documents(documents)
     logger.info("Done adding documents.")
+
+def collection_exists(collection_name: str) -> bool:
+    """
+    Checks whether a collection already has data in it.
+    Used to prevent silently duplicating an already-indexed repo (see file 9 issue).
+    """
+    store = get_vectorstore(collection_name)
+    existing = store.get(limit=1)
+    return len(existing.get("ids", [])) > 0
