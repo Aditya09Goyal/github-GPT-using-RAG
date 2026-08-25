@@ -1,4 +1,4 @@
-# 🧭 CodeCompass - GitHub Repo Chat
+# 🧭 GithubGPT - GitHub Repo Chat
 
 ![Hero](assets/hero.svg)
 
@@ -66,28 +66,20 @@ backend/
 ```
 React (Vite + Tailwind)
        ↕
-Flask REST API
+FastAPT REST API
        ↕
 Embedchain (ingest + retrieve)
        ↕               ↘
-   Chroma (vectors)   Groq LLM
+   Chroma (vectors)   Gemini LLM
 ```
 
 ---
+## Design Choices
 
-## 🛠️ Technical notes
-
-- Embeddings: sentence‑transformers `all‑MiniLM‑L6‑v2` (fast and compact)
-- Vector DB: Chroma persisted under `backend/db` for local, fast retrieval
-- LLM: Groq (configurable). Prompt encourages concise, source‑grounded answers
-- Metadata: each chunk stores `github_repo`, `file_path`, `chunk_index` for precise citations
-
----
-
-## 🧰 Troubleshooting
-
-- 401/403 from LLM → check `GROQ_API_KEY` in `backend/.env`, restart Flask
-- Cannot add repo → ensure it’s a public GitHub repository or provide a `GITHUB_TOKEN`
+ - In `app/services/embeddings.py`, `normalize_embeddings=True` is a small but important detail — it scales every vector to unit length, so when we later compare vectors for similarity, the comparison is purely about direction (meaning) rather than being skewed by magnitude (which has nothing to do with semantic similarity).
+ - In `app/services/vectorstore.py`, `collection_name` per repo — Chroma lets you have multiple separate "collections" inside one database, like separate folders. We're using one collection per repo (e.g. `"hello-world"`, `"my-flask-app"`), so if a user later indexes two different repos, searching one never accidentally returns chunks from the other.
+ - `Document` wrapping — LangChain's vectorstores don't work with our own Chunk dataclass directly; they expect their own Document type, which pairs `page_content` (the actual text) with metadata (a dictionary of anything else worth remembering — here, which file it came from). This metadata is what lets the chatbot later say "this answer is based on `src/auth.py`" instead of just returning a floating paragraph with no origin.
+ - Splitting into `repo.py` and `chat.py` (rather than one big `schemas.py`) mirrors the two real actions this app supports: indexing a repo and asking a question about one. Keeps things easy to find as the project grows.
 
 ---
 

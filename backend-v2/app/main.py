@@ -2,6 +2,8 @@ from fastapi import FastAPI
 
 from app.core.config import settings
 from app.core.logging import setup_logging, get_logger
+from app.api import routes_repo, routes_chat
+
 
 # Set up logging before anything else happens
 setup_logging()
@@ -13,6 +15,8 @@ app = FastAPI(
     version="1.0.0",
 )
 
+app.include_router(routes_repo.router)
+app.include_router(routes_chat.router)
 
 @app.on_event("startup")
 async def on_startup():

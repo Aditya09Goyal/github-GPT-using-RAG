@@ -9,8 +9,9 @@ class Settings(BaseSettings):
     Field names map to env var names (case-insensitive).
     """
 
-    # --- LLM (Gemini) ---
-    google_api_key: str
+    # --- LLM (Groq) ---
+    groq_api_key: str
+    google_api_key: str | None = None
 
     # --- GitHub access ---
     github_token: str | None = None  # optional: only needed for private repos / higher rate limits
