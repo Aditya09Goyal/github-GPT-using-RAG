@@ -29,7 +29,7 @@ def get_llm() -> ChatGroq:
     if _llm is None:
         logger.info("Initializing Groq LLM client")
         _llm = ChatGroq(
-            model="llama-3.3-70b-versatile",
+            model="openai/gpt-oss-120b",
             groq_api_key=settings.groq_api_key,
             temperature=0.2,
         )
