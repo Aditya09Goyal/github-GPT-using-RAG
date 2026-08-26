@@ -3,7 +3,7 @@ from fastapi import FastAPI
 from app.core.config import settings
 from app.core.logging import setup_logging, get_logger
 from app.api import routes_repo, routes_chat
-
+from fastapi.middleware.cors import CORSMiddleware
 
 # Set up logging before anything else happens
 setup_logging()
@@ -13,6 +13,14 @@ app = FastAPI(
     title="GitHub Chat API",
     description="RAG pipeline to chat with any GitHub repository",
     version="1.0.0",
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://localhost:3000"],  # common Vite / CRA dev ports
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 app.include_router(routes_repo.router)
