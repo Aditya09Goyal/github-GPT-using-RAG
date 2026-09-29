@@ -1,5 +1,4 @@
-import React, { useState, useEffect, useRef, FormEvent, KeyboardEvent, ChangeEvent } from 'react';
-
+import { useState, useEffect, useRef, FormEvent, KeyboardEvent, ChangeEvent } from 'react';
 // ==========================================
 // TYPES & INTERFACES
 // ==========================================
