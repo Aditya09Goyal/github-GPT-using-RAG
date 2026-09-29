@@ -45,3 +45,4 @@ Thumbs.db
 __pycache__/
 backend-v2/.cache/
 frontend/.vite/
+!frontend/src/lib/
