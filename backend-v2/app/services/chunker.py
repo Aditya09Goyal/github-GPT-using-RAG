@@ -52,7 +52,7 @@ def chunk_files(file_paths: list[Path], repo_root: Path) -> list[Chunk]:
         if content is None or not content.strip():
             continue
 
-        relative_path = str(path.relative_to(repo_root))
+        relative_path = path.relative_to(repo_root).as_posix()
         pieces = splitter.split_text(content)
 
         for i, piece in enumerate(pieces):
