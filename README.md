@@ -1,6 +1,12 @@
 <div align="center">
 
-# 🧭 GitHub-GPT : Chat with any GitHub Repo
+# 🧭 GitHub-GPT : Ask GitHub Repo Codebase 
+
+<img width="959" height="412" alt="Screenshot 2026-09-29 160946" src="https://github.com/user-attachments/assets/2ad6c2a1-13d0-43af-ad5d-bc9400100deb" />
+<img width="640" height="295" alt="Screenshot 2026-09-29 161256" src="https://github.com/user-attachments/assets/0e888339-6d3d-44f4-92b9-61233324b401" />
+
+
+
 
 **Ask questions about any public GitHub repo and get answers grounded in its actual source code — with the files cited.**
 
