@@ -22,9 +22,16 @@ ALLOWED_NO_EXTENSION_NAMES = {"README", "LICENSE", "Dockerfile", "Makefile"}
 # Folders to skip entirely while walking the repo
 IGNORED_DIRS = {
     ".git", "node_modules", "venv", "__pycache__",
-    "dist", "build", ".next", ".venv",
+    "dist", "build", ".next", ".venv", ".cache", ".vite",
 }
 
+# Huge auto-generated files: thousands of useless chunks, slow to embed on a free CPU
+IGNORED_FILES = {
+    "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "poetry.lock",
+    "uv.lock", "Pipfile.lock", "Cargo.lock", "composer.lock",
+}
+
+MAX_FILE_BYTES = 200_000  # skip anything bigger than ~200 KB (minified bundles, data dumps)
 
 def clone_repo(repo_url: str, repo_name: str) -> Path:
     """
@@ -61,6 +68,9 @@ def collect_files(repo_path: Path) -> list[Path]:
             continue
 
         if path.suffix not in ALLOWED_EXTENSIONS and path.name not in ALLOWED_NO_EXTENSION_NAMES:
+            continue
+        
+        if path.name in IGNORED_FILES or path.stat().st_size > MAX_FILE_BYTES:
             continue
 
         collected.append(path)

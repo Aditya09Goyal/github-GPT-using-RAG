@@ -29,7 +29,7 @@ app.include_router(routes_chat.router)
 @app.on_event("startup")
 async def on_startup():
     logger.info("Starting GitHub Chat API...")
-    logger.info(f"Chroma persist dir: {settings.chroma_persist_dir}")
+    logger.info("Vector store: Postgres + pgvector")
     logger.info(f"Repo clone dir: {settings.repo_clone_dir}")
 
 
