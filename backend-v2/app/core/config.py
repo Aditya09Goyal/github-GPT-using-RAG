@@ -18,6 +18,8 @@ class Settings(BaseSettings):
 
     # --- Embedding model ---
     embedding_model_name: str = "sentence-transformers/all-MiniLM-L6-v2"
+    embedding_model_name: str = "sentence-transformers/all-MiniLM-L6-v2"
+    embedding_cache_dir: str = str(Path(__file__).resolve().parent.parent.parent / ".cache" / "fastembed")
 
     # --- Vector store ---
     chroma_persist_dir: str = str(Path(__file__).resolve().parent.parent / "db" / "chroma")
