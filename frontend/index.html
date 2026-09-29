@@ -2,12 +2,19 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/github.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>GitHub Chat</title>
+    <meta name="description" content="GitHub-GPT: chat with any GitHub repository. Answers grounded in the repo's actual files." />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%234f46e5'/><path d='M11 11l-5 5 5 5M21 11l5 5-5 5M18 8l-4 16' stroke='white' stroke-width='2.4' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>" />
+    <title>GitHub-GPT · Chat with any repository</title>
+    <script>
+      try {
+        var t = localStorage.getItem("ghgpt:theme");
+        if (t !== "light") document.documentElement.classList.add("dark"); // dark is the default
+      } catch (e) {}
+    </script>
   </head>
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
-</html> 
+</html>
