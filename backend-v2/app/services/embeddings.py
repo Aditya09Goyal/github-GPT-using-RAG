@@ -1,29 +1,46 @@
-from langchain_huggingface import HuggingFaceEmbeddings
+from fastembed import TextEmbedding
+from langchain_core.embeddings import Embeddings
 
 from app.core.config import settings
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
-# Cached at module level — loading the model from disk/downloading it is slow
-# (a few seconds to a minute the first time). We only want this to happen once
-# per app run, not once per request.
-_embedding_model: HuggingFaceEmbeddings | None = None
 
-
-def get_embedding_model() -> HuggingFaceEmbeddings:
+class FastEmbedEmbeddings(Embeddings):
     """
-    Returns a singleton HuggingFaceEmbeddings instance.
-    First call loads the model (slow); every call after that reuses it (instant).
+    LangChain-compatible wrapper around fastembed.
+    fastembed runs the same all-MiniLM-L6-v2 model on ONNX Runtime instead of
+    PyTorch, so it needs a fraction of the RAM (fits Render's 512 MB free tier).
+    Vectors come out already normalized (unit length), same as before.
+    """
+
+    def __init__(self, model_name: str, cache_dir: str | None = None):
+        self.model = TextEmbedding(model_name=model_name, cache_dir=cache_dir)
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        return [v.tolist() for v in self.model.embed(texts, batch_size=32)]
+
+    def embed_query(self, text: str) -> list[float]:
+        return next(iter(self.model.query_embed(text))).tolist()
+
+
+# Cached at module level — loading the model is slow, so do it once per app run.
+_embedding_model: FastEmbedEmbeddings | None = None
+
+
+def get_embedding_model() -> FastEmbedEmbeddings:
+    """
+    Returns a singleton embedding model.
+    First call loads (and, the very first time, downloads) the model; later calls reuse it.
     """
     global _embedding_model
 
     if _embedding_model is None:
         logger.info(f"Loading embedding model: {settings.embedding_model_name}")
-        _embedding_model = HuggingFaceEmbeddings(
+        _embedding_model = FastEmbedEmbeddings(
             model_name=settings.embedding_model_name,
-            model_kwargs={"device": "cpu"},       # switch to "cuda" if you have a GPU set up
-            encode_kwargs={"normalize_embeddings": True},  # cosine similarity works better on normalized vectors
+            cache_dir=settings.embedding_cache_dir,
         )
         logger.info("Embedding model loaded.")
 
