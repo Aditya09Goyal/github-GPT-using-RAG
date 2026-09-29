@@ -1,4 +1,6 @@
+import os
 import shutil
+import stat
 from pathlib import Path
 
 import git
@@ -12,26 +14,65 @@ logger = get_logger(__name__)
 # Skip binaries, images, lockfiles, etc — they're not useful for a chat context
 # and would just waste embedding time/space.
 ALLOWED_EXTENSIONS = {
-    ".py", ".js", ".ts", ".tsx", ".jsx", ".java", ".go", ".rs",
-    ".md", ".txt", ".json", ".yaml", ".yml", ".toml",
-    ".html", ".css",
+    ".py",
+    ".js",
+    ".ts",
+    ".tsx",
+    ".jsx",
+    ".java",
+    ".go",
+    ".rs",
+    ".md",
+    ".txt",
+    ".json",
+    ".yaml",
+    ".yml",
+    ".toml",
+    ".html",
+    ".css",
 }
 
 ALLOWED_NO_EXTENSION_NAMES = {"README", "LICENSE", "Dockerfile", "Makefile"}
 
 # Folders to skip entirely while walking the repo
 IGNORED_DIRS = {
-    ".git", "node_modules", "venv", "__pycache__",
-    "dist", "build", ".next", ".venv", ".cache", ".vite",
+    ".git",
+    "node_modules",
+    "venv",
+    "__pycache__",
+    "dist",
+    "build",
+    ".next",
+    ".venv",
+    ".cache",
+    ".vite",
 }
 
 # Huge auto-generated files: thousands of useless chunks, slow to embed on a free CPU
 IGNORED_FILES = {
-    "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "poetry.lock",
-    "uv.lock", "Pipfile.lock", "Cargo.lock", "composer.lock",
+    "package-lock.json",
+    "pnpm-lock.yaml",
+    "yarn.lock",
+    "poetry.lock",
+    "uv.lock",
+    "Pipfile.lock",
+    "Cargo.lock",
+    "composer.lock",
 }
 
-MAX_FILE_BYTES = 200_000  # skip anything bigger than ~200 KB (minified bundles, data dumps)
+MAX_FILE_BYTES = (
+    200_000  # skip anything bigger than ~200 KB (minified bundles, data dumps)
+)
+
+
+def _force_remove(func, path, exc):
+    """
+    Windows marks git's pack files as read-only, so rmtree fails with
+    'Access is denied'. Clear the read-only flag and retry the delete.
+    """
+    os.chmod(path, stat.S_IWRITE)
+    func(path)
+
 
 def clone_repo(repo_url: str, repo_name: str) -> Path:
     """
@@ -43,12 +84,14 @@ def clone_repo(repo_url: str, repo_name: str) -> Path:
 
     if dest.exists():
         logger.info(f"Removing existing local copy at {dest}")
-        shutil.rmtree(dest)
+        shutil.rmtree(dest, onexc=_force_remove)
 
     dest.parent.mkdir(parents=True, exist_ok=True)
 
     logger.info(f"Cloning {repo_url} into {dest}")
-    git.Repo.clone_from(repo_url, dest, depth=1)  # depth=1 = shallow clone, don't need full history
+    git.Repo.clone_from(
+        repo_url, dest, depth=1
+    )  # depth=1 = shallow clone, don't need full history
 
     return dest
 
@@ -67,9 +110,12 @@ def collect_files(repo_path: Path) -> list[Path]:
         if any(ignored in path.parts for ignored in IGNORED_DIRS):
             continue
 
-        if path.suffix not in ALLOWED_EXTENSIONS and path.name not in ALLOWED_NO_EXTENSION_NAMES:
+        if (
+            path.suffix not in ALLOWED_EXTENSIONS
+            and path.name not in ALLOWED_NO_EXTENSION_NAMES
+        ):
             continue
-        
+
         if path.name in IGNORED_FILES or path.stat().st_size > MAX_FILE_BYTES:
             continue
 
