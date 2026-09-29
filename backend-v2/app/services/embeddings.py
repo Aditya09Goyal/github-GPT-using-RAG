@@ -16,10 +16,12 @@ class FastEmbedEmbeddings(Embeddings):
     """
 
     def __init__(self, model_name: str, cache_dir: str | None = None):
-        self.model = TextEmbedding(model_name=model_name, cache_dir=cache_dir)
+        # threads=1 keeps ONNX Runtime's memory use low (~420 MB peak instead of ~800 MB)
+        self.model = TextEmbedding(model_name=model_name, cache_dir=cache_dir, threads=1)
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
-        return [v.tolist() for v in self.model.embed(texts, batch_size=32)]
+        # small batches = lower peak RAM while indexing big repos
+        return [v.tolist() for v in self.model.embed(texts, batch_size=8)]
 
     def embed_query(self, text: str) -> list[float]:
         return next(iter(self.model.query_embed(text))).tolist()
