@@ -1,6 +1,4 @@
-// Mirrors app/schemas/repo.py and app/schemas/chat.py on the backend.
-// Keeping these in sync by hand is a real maintenance burden worth knowing
-// about now — if a backend field changes, this file has to be updated too.
+// Mirrors backend-v2/app/schemas — keep in sync if a backend field changes.
 
 export interface IndexRepoRequest {
   repo_url: string;
@@ -24,18 +22,23 @@ export interface ChatResponse {
   sources: string[];
 }
 
-// Frontend-only type — the backend doesn't know about "chat history,"
-// it only ever sees one question at a time. We build the conversation
-// view entirely on the frontend by accumulating these locally.
+// ---------- frontend-only types ----------
+
 export interface ChatMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
   sources?: string[];
+  error?: boolean;
+  ms?: number; // response time
 }
 
-// Mirrors the shape FastAPI sends back on an HTTPException — e.g. our
-// 409 "already indexed" and 404 "collection not found" errors.
-export interface ApiError {
-  detail: string;
+export interface Repo {
+  name: string; // collection name
+  url: string;
+  owner: string;
+  repo: string;
+  files?: number;
+  chunks?: number;
+  indexedAt: number;
 }

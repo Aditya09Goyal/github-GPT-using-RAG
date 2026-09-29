@@ -1,54 +1,37 @@
-import type {
-  IndexRepoRequest,
-  IndexRepoResponse,
-  ChatRequest,
-  ChatResponse,
-  ApiError,
-} from "../types/api";
+import type { IndexRepoRequest, IndexRepoResponse, ChatRequest, ChatResponse } from "../types/api";
 
-// Vite exposes env vars prefixed with VITE_ to the browser.
-// Add VITE_API_BASE_URL=http://localhost:8000 to your .env file.
-const BASE_URL = import.meta.env.VITE_API_BASE_URL as string;
+const BASE_URL = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, "") ?? "";
 
-/**
- * Thin wrapper around fetch that:
- * - sends/receives JSON automatically
- * - throws a readable Error using the backend's own error message
- *   (our FastAPI routes return {"detail": "..."} on failure — see
- *   the 409/404/500 cases in routes_repo.py and routes_chat.py)
- */
-async function request<TResponse>(
-  path: string,
-  body: unknown
-): Promise<TResponse> {
-  const res = await fetch(`${BASE_URL}${path}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-
-  if (!res.ok) {
-    const errorData: ApiError = await res.json().catch(() => ({
-      detail: `Request failed with status ${res.status}`,
-    }));
-    throw new Error(errorData.detail);
+export class ApiError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.status = status;
   }
-
-  return res.json() as Promise<TResponse>;
 }
 
-/**
- * Calls POST /repos — clones, chunks, embeds, and stores a GitHub repo.
- * Throws if the collection already exists (409) or indexing fails (422/500).
- */
-export function indexRepo(payload: IndexRepoRequest): Promise<IndexRepoResponse> {
-  return request<IndexRepoResponse>("/repos", payload);
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  let res: Response;
+  try {
+    res = await fetch(`${BASE_URL}${path}`, {
+      ...init,
+      headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
+    });
+  } catch {
+    throw new ApiError("Can't reach the server. It may be waking up — try again in a few seconds.", 0);
+  }
+  if (!res.ok) {
+    const data = await res.json().catch(() => null);
+    const detail = typeof data?.detail === "string" ? data.detail : `Request failed (${res.status})`;
+    throw new ApiError(detail, res.status);
+  }
+  return res.json() as Promise<T>;
 }
 
-/**
- * Calls POST /chat — asks a question about an already-indexed repo.
- * Throws if the collection isn't found (404) or generation fails (500).
- */
-export function askQuestion(payload: ChatRequest): Promise<ChatResponse> {
-  return request<ChatResponse>("/chat", payload);
-}
+export const indexRepo = (body: IndexRepoRequest) =>
+  request<IndexRepoResponse>("/repos", { method: "POST", body: JSON.stringify(body) });
+
+export const askQuestion = (body: ChatRequest) =>
+  request<ChatResponse>("/chat", { method: "POST", body: JSON.stringify(body) });
+
+export const health = () => request<{ status: string }>("/health");
