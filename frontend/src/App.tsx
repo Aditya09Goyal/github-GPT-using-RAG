@@ -6,23 +6,59 @@ import FileView from "./components/FileView";
 import IndexPanel from "./components/IndexPanel";
 import StatusBar, { type ServerState } from "./components/StatusBar";
 import Logo from "./components/Logo";
-import { health, streamQuestion } from "./api/client";
-import { load, save } from "./lib/storage";
+import Login from "./components/Login";
+import { health, setUnauthorizedHandler, streamQuestion } from "./api/client";
+import { clearToken, consumeAuthRedirect, getToken, userFromToken, type User } from "./lib/auth";
+import { load, migrateLegacyStorage, save, userKey } from "./lib/storage";
 import { uid } from "./lib/repo";
 import type { ChatMessage, ChatTurn, Repo } from "./types/api";
 
 // How many earlier messages are sent with each question (the backend trims further).
 const HISTORY_MESSAGES = 10;
 
+function currentUser(): User | null {
+  const token = getToken();
+  return token ? userFromToken(token) : null;
+}
+
+/** Sign-in gate: shows the login screen until there's a valid session, then the app. */
 export default function App() {
-  const [repos, setRepos] = useState<Repo[]>(() => load("ghgpt:repos", []));
+  const [authError] = useState(() => consumeAuthRedirect().error);
+  const [user, setUser] = useState<User | null>(currentUser);
+
+  useEffect(() => {
+    setUnauthorizedHandler(() => setUser(null));
+    // Tokens expire after a while; drop back to the sign-in screen when this one does.
+    if (!user) return;
+    const t = setTimeout(() => setUser(null), Math.min(user.exp * 1000 - Date.now(), 2 ** 31 - 1));
+    return () => clearTimeout(t);
+  }, [user]);
+
+  if (!user) return <Login error={authError} />;
+
+  migrateLegacyStorage(user.id);
+  return (
+    <Workspace
+      key={user.id}
+      user={user}
+      onSignOut={() => {
+        clearToken();
+        setUser(null);
+      }}
+    />
+  );
+}
+
+function Workspace({ user, onSignOut }: { user: User; onSignOut: () => void }) {
+  const key = (name: string) => userKey(user.id, name);
+  const [repos, setRepos] = useState<Repo[]>(() => load(key("repos"), []));
   const [chats, setChats] = useState<Record<string, ChatMessage[]>>(() =>
     // an answer interrupted by a page reload is never going to finish
     Object.fromEntries(
-      Object.entries(load<Record<string, ChatMessage[]>>("ghgpt:chats", {})).map(([k, v]) => [k, v.map(({ streaming: _s, ...m }) => m)]),
+      Object.entries(load<Record<string, ChatMessage[]>>(key("chats"), {})).map(([k, v]) => [k, v.map(({ streaming: _s, ...m }) => m)]),
     ),
   );
-  const [active, setActive] = useState<string | null>(() => load<string | null>("ghgpt:active", null));
+  const [active, setActive] = useState<string | null>(() => load<string | null>(key("active"), null));
   const [showNew, setShowNew] = useState(false);
   const [tabs, setTabs] = useState<string[]>([]);
   const [tab, setTab] = useState("chat");
@@ -36,11 +72,11 @@ export default function App() {
   const messages = useMemo(() => (active ? chats[active] ?? [] : []), [chats, active]);
   const files = useMemo(() => [...new Set(messages.flatMap((m) => m.sources ?? []))], [messages]);
 
-  useEffect(() => save("ghgpt:repos", repos), [repos]);
-  useEffect(() => save("ghgpt:active", active), [active]);
+  useEffect(() => save(key("repos"), repos), [repos]);
+  useEffect(() => save(key("active"), active), [active]);
   useEffect(() => {
     const trimmed = Object.fromEntries(Object.entries(chats).map(([k, v]) => [k, v.slice(-60)]));
-    save("ghgpt:chats", trimmed);
+    save(key("chats"), trimmed);
   }, [chats]);
 
   // Wake the (free-tier) backend as soon as the page opens
@@ -177,6 +213,8 @@ export default function App() {
       onRemove={removeRepo}
       onOpenFile={openFile}
       onToggleTheme={toggleTheme}
+      user={user}
+      onSignOut={onSignOut}
       onClose={onClose}
     />
   );

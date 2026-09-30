@@ -82,6 +82,7 @@ This technique is called **RAG (Retrieval-Augmented Generation)**. It prevents t
 - 🎯 **Repo-scoped search** — each repo is stored in its own collection, so answers never mix repositories
 - ⚡ **Streaming answers** — the reply appears token by token, with a Stop button
 - 🧵 **Conversation memory** — follow-up questions ("where is *it* called?") are rewritten into standalone questions before searching, and recent messages are passed to the LLM
+- 🔐 **Sign in with GitHub** — each user only sees and chats with the repos they indexed
 - 🚫 **Hallucination guard** — the prompt forces the LLM to say _"I don't know"_ when the answer isn't in the code
 - 🧹 **Smart file filtering** — skips `node_modules`, build folders, binaries, lockfiles and files > 200 KB
 - 💾 **Persistent index** — once indexed, a repo stays searchable (stored in Postgres)
@@ -207,11 +208,22 @@ In the Neon **SQL Editor** run:
 CREATE EXTENSION IF NOT EXISTS vector;
 ```
 
-### 3. Backend
+### 3. GitHub OAuth App (one time)
+
+Sign-in uses GitHub. Create an OAuth App at **GitHub → Settings → Developer settings → [OAuth Apps](https://github.com/settings/developers) → New OAuth App**:
+
+| Field                      | Local                                         | Production                                            |
+| -------------------------- | --------------------------------------------- | ----------------------------------------------------- |
+| Homepage URL               | `http://localhost:3000`                       | `https://your-app.vercel.app`                         |
+| Authorization callback URL | `http://localhost:8000/auth/github/callback`  | `https://your-api.onrender.com/auth/github/callback`  |
+
+GitHub allows one callback URL per app, so create **one app for local** and **one for production**. Copy the Client ID and a generated Client Secret into the backend `.env`.
+
+### 4. Backend
 
 ```bash
 cd backend-v2
-cp .env.example .env        # fill in GROQ_API_KEY and DATABASE_URL
+cp .env.example .env        # fill in GROQ_API_KEY, DATABASE_URL, GITHUB_CLIENT_ID/SECRET, JWT_SECRET
 python -m venv .venv
 .venv\Scripts\activate      # Windows   (macOS/Linux: source .venv/bin/activate)
 pip install uv
@@ -221,7 +233,7 @@ uvicorn app.main:app --reload --reload-dir app --port 8000
 
 ➡️ Open **http://localhost:8000/docs**
 
-### 4. Frontend (new terminal)
+### 5. Frontend (new terminal)
 
 ```bash
 cd frontend
@@ -240,10 +252,14 @@ npm run dev
 | ----------------- | ------------------- | -------- | ---------------------------------------------------------------- |
 | `backend-v2/.env` | `GROQ_API_KEY`      | ✅       | `gsk_...`                                                        |
 | `backend-v2/.env` | `DATABASE_URL`      | ✅       | `postgresql://user:pass@ep-xxx.neon.tech/neondb?sslmode=require` |
-| `backend-v2/.env` | `CORS_ORIGINS`      | ✅       | `https://your-app.vercel.app,http://localhost:3000`              |
+| `backend-v2/.env` | `CORS_ORIGINS`      | ✅       | `https://your-app.vercel.app,http://localhost:3000` — the first one is where users land after sign-in by default |
+| `backend-v2/.env` | `GITHUB_CLIENT_ID`  | ✅       | from your GitHub OAuth App                                       |
+| `backend-v2/.env` | `GITHUB_CLIENT_SECRET` | ✅    | from your GitHub OAuth App                                       |
+| `backend-v2/.env` | `JWT_SECRET`        | ✅       | long random string, e.g. `openssl rand -hex 32`                  |
+| `backend-v2/.env` | `ADMIN_GITHUB_LOGIN` | ➖      | your GitHub username — repos indexed before sign-in existed are assigned to you when you sign in |
 | `frontend/.env`   | `VITE_API_BASE_URL` | ✅       | `http://localhost:8000` (no trailing `/`)                        |
 
-Other tunables in `config.py` (can also be set as env vars): `CHUNK_SIZE` (1000), `CHUNK_OVERLAP` (200), `RETRIEVER_TOP_K` (5), `HISTORY_MAX_MESSAGES` (6), `HISTORY_MAX_CHARS` (1500), `EMBEDDING_MODEL_NAME`.
+Other tunables in `config.py` (can also be set as env vars): `CHUNK_SIZE` (1000), `CHUNK_OVERLAP` (200), `RETRIEVER_TOP_K` (5), `HISTORY_MAX_MESSAGES` (6), `HISTORY_MAX_CHARS` (1500), `JWT_EXPIRE_DAYS` (30), `EMBEDDING_MODEL_NAME`.
 
 > Never commit `.env` files — they are already in `.gitignore`.
 
@@ -256,12 +272,18 @@ Other tunables in `config.py` (can also be set as env vars): `CHUNK_SIZE` (1000)
 | `POST` | `/repos`  | Download, chunk, embed and store a repository |
 | `POST` | `/chat`   | Ask a question about an indexed repository    |
 | `POST` | `/chat/stream` | Same as `/chat`, streamed as Server-Sent Events |
+| `GET`  | `/auth/github/login` | Start "Sign in with GitHub" (browser redirect) |
+| `GET`  | `/auth/github/callback` | GitHub returns here; redirects to the frontend with `#token=...` |
+| `GET`  | `/auth/me` | The signed-in user's profile                 |
 | `GET`  | `/health` | Liveness check → `{"status": "ok"}`           |
+
+`/repos`, `/chat`, `/chat/stream` and `/auth/me` need `Authorization: Bearer <token>` (the token the app receives after sign-in). Without it they return `401`. Each user only sees their own repos: asking about someone else's collection returns `404`, and two users can use the same collection name.
 
 **Index a repo**
 
 ```bash
 curl -X POST https://github-gpt-api-c13y.onrender.com/repos \
+  -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"repo_url": "https://github.com/octocat/Hello-World", "collection_name": "hello-world"}'
 ```
@@ -279,6 +301,7 @@ curl -X POST https://github-gpt-api-c13y.onrender.com/repos \
 
 ```bash
 curl -X POST https://github-gpt-api-c13y.onrender.com/chat \
+  -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"question": "What is in this repo?", "collection_name": "hello-world"}'
 ```
@@ -296,6 +319,7 @@ Both chat endpoints accept an optional `history` (earlier messages, oldest first
 
 ```bash
 curl -N -X POST https://github-gpt-api-c13y.onrender.com/chat/stream \
+  -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"question": "Where is it used?", "collection_name": "hello-world",
        "history": [{"role": "user", "content": "What is in the README?"},
@@ -318,6 +342,7 @@ If something fails after streaming has started, an `event: error` with `{"detail
 | Status | Meaning                                                 |
 | ------ | ------------------------------------------------------- |
 | `409`  | Collection name already indexed — choose another name   |
+| `401`  | Not signed in, or the session expired                   |
 | `404`  | Collection not found — index the repo first             |
 | `422`  | Invalid request body, or no indexable files in the repo |
 
@@ -328,7 +353,7 @@ If something fails after streaming has started, an `event: error` with `{"detail
 | Part     | Platform                  | Settings                                                                                                                                            |
 | -------- | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Database | **Neon** (free)           | `CREATE EXTENSION IF NOT EXISTS vector;` · use the **direct** (non-pooled) connection string                                                        |
-| Backend  | **Render** (free, Docker) | Dockerfile path `backend-v2/Dockerfile` · build context `backend-v2` · health check `/health` · env: `GROQ_API_KEY`, `DATABASE_URL`, `CORS_ORIGINS` |
+| Backend  | **Render** (free, Docker) | Dockerfile path `backend-v2/Dockerfile` · build context `backend-v2` · health check `/health` · env: `GROQ_API_KEY`, `DATABASE_URL`, `CORS_ORIGINS`, `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `JWT_SECRET`, `ADMIN_GITHUB_LOGIN` |
 | Frontend | **Vercel** (free)         | Root directory `frontend` · preset Vite · env: `VITE_API_BASE_URL`                                                                                  |
 
 🔁 Every `git push` to `main` automatically redeploys both the backend and the frontend.

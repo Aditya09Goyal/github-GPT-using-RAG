@@ -16,6 +16,14 @@ class Settings(BaseSettings):
     # --- GitHub access ---
     github_token: str | None = None  # optional: only needed for private repos / higher rate limits
 
+    # --- Sign in with GitHub (OAuth App: github.com/settings/developers) ---
+    github_client_id: str
+    github_client_secret: str
+    jwt_secret: str  # long random string used to sign login tokens, e.g. `openssl rand -hex 32`
+    jwt_expire_days: int = 30
+    # GitHub login of the owner; on their sign-in, repos indexed before login existed are assigned to them
+    admin_github_login: str | None = None
+
     # --- Embedding model ---
     embedding_model_name: str = "sentence-transformers/all-MiniLM-L6-v2"
     embedding_cache_dir: str = str(Path(__file__).resolve().parent.parent.parent / ".cache" / "fastembed")
@@ -39,6 +47,10 @@ class Settings(BaseSettings):
 
     # --- CORS ---
     cors_origins: str = "http://localhost:5173,http://localhost:3000"
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        return [o.strip().rstrip("/") for o in self.cors_origins.split(",") if o.strip()]
 
     model_config = SettingsConfigDict(
         env_file=".env",

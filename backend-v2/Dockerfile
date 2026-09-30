@@ -20,4 +20,5 @@ RUN python -c "from fastembed import TextEmbedding; TextEmbedding('sentence-tran
 COPY app ./app
 
 # Render gives the port in $PORT
-CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+# --proxy-headers: trust Render's X-Forwarded-Proto so generated URLs (the OAuth callback) use https
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --proxy-headers --forwarded-allow-ips=*"]

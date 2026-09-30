@@ -1,8 +1,8 @@
 from langchain_postgres import PGVector
 from langchain_core.documents import Document
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 
-from app.core.config import settings
+from app.core.db import engine as _engine
 from app.core.logging import get_logger
 from app.services.embeddings import get_embedding_model
 from app.services.chunker import Chunk
@@ -10,27 +10,6 @@ from app.services.chunker import Chunk
 logger = get_logger(__name__)
 
 EMBEDDING_DIM = 384  # all-MiniLM-L6-v2 output size
-
-
-def _sqlalchemy_url(url: str) -> str:
-    """
-    Neon gives a URL starting with postgresql:// (or postgres://).
-    SQLAlchemy needs to be told to use the psycopg (v3) driver.
-    """
-    for prefix in ("postgresql+psycopg://", "postgresql://", "postgres://"):
-        if url.startswith(prefix):
-            return "postgresql+psycopg://" + url[len(prefix):]
-    return url
-
-
-# One shared connection pool for the whole app.
-# pool_pre_ping: Neon suspends idle databases, so check a connection is alive before using it.
-_engine = create_engine(
-    _sqlalchemy_url(settings.database_url),
-    pool_pre_ping=True,
-    pool_size=5,
-    max_overflow=5,
-)
 
 
 def get_vectorstore(collection_name: str) -> PGVector:
@@ -100,3 +79,16 @@ def collection_exists(collection_name: str) -> bool:
     except Exception:
         # Tables don't exist yet (fresh database) → nothing has been indexed.
         return False
+
+def delete_collection(collection_name: str) -> None:
+    """
+    Removes a collection and all its chunks (the embedding rows are deleted by
+    the foreign key's ON DELETE CASCADE). Does nothing if it doesn't exist.
+    """
+    query = text("DELETE FROM langchain_pg_collection WHERE name = :name")
+    try:
+        with _engine.begin() as conn:
+            conn.execute(query, {"name": collection_name})
+    except Exception as e:
+        # Usually: tables don't exist yet (fresh database) → nothing to delete.
+        logger.warning(f"Could not delete collection '{collection_name}': {e}")

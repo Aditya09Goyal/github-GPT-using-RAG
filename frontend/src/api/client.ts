@@ -1,6 +1,32 @@
 import type { IndexRepoRequest, IndexRepoResponse, ChatRequest, ChatResponse } from "../types/api";
 
+import { clearToken, getToken } from "../lib/auth";
+
 const BASE_URL = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, "") ?? "";
+
+/** Full-page navigation target for "Sign in with GitHub" (the backend redirects on to GitHub). */
+export const loginUrl = () => `${BASE_URL}/auth/github/login?redirect_to=${encodeURIComponent(window.location.origin)}`;
+
+// Called when the server says the session is missing/expired, so the app can show the sign-in screen.
+let onUnauthorized: () => void = () => {};
+export const setUnauthorizedHandler = (fn: () => void) => {
+  onUnauthorized = fn;
+};
+
+function authHeaders(): Record<string, string> {
+  const token = getToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+async function failure(res: Response): Promise<ApiError> {
+  if (res.status === 401) {
+    clearToken();
+    onUnauthorized();
+  }
+  const data = await res.json().catch(() => null);
+  const detail = typeof data?.detail === "string" ? data.detail : `Request failed (${res.status})`;
+  return new ApiError(detail, res.status);
+}
 
 export class ApiError extends Error {
   status: number;
@@ -15,16 +41,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   try {
     res = await fetch(`${BASE_URL}${path}`, {
       ...init,
-      headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
+      headers: { "Content-Type": "application/json", ...authHeaders(), ...(init?.headers ?? {}) },
     });
   } catch {
     throw new ApiError("Can't reach the server. It may be waking up — try again in a few seconds.", 0);
   }
-  if (!res.ok) {
-    const data = await res.json().catch(() => null);
-    const detail = typeof data?.detail === "string" ? data.detail : `Request failed (${res.status})`;
-    throw new ApiError(detail, res.status);
-  }
+  if (!res.ok) throw await failure(res);
   return res.json() as Promise<T>;
 }
 
@@ -51,7 +73,7 @@ export async function streamQuestion(body: ChatRequest, handlers: StreamHandlers
   try {
     res = await fetch(`${BASE_URL}/chat/stream`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...authHeaders() },
       body: JSON.stringify(body),
       signal,
     });
@@ -59,11 +81,7 @@ export async function streamQuestion(body: ChatRequest, handlers: StreamHandlers
     if (signal?.aborted) throw e;
     throw new ApiError("Can't reach the server. It may be waking up — try again in a few seconds.", 0);
   }
-  if (!res.ok || !res.body) {
-    const data = await res.json().catch(() => null);
-    const detail = typeof data?.detail === "string" ? data.detail : `Request failed (${res.status})`;
-    throw new ApiError(detail, res.status);
-  }
+  if (!res.ok || !res.body) throw await failure(res);
 
   const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
   let buffer = "";
