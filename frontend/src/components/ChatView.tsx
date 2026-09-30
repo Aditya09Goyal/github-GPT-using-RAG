@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowUp, FileCode2, Sparkles } from "lucide-react";
+import { ArrowUp, FileCode2, Sparkles, Square } from "lucide-react";
 import Markdown from "./Markdown";
 import type { ChatMessage, Repo } from "../types/api";
 
@@ -15,17 +15,29 @@ interface Props {
   messages: ChatMessage[];
   loading: boolean;
   onSend: (q: string) => void;
+  onStop: () => void;
   onOpenFile: (path: string) => void;
 }
 
-export default function ChatView({ repo, messages, loading, onSend, onOpenFile }: Props) {
+export default function ChatView({ repo, messages, loading, onSend, onStop, onOpenFile }: Props) {
   const [q, setQ] = useState("");
   const endRef = useRef<HTMLDivElement>(null);
   const boxRef = useRef<HTMLTextAreaElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const last = messages[messages.length - 1];
+  const streaming = !!last?.streaming;
+  const waiting = loading && !streaming; // request sent, first token not here yet
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [messages.length, loading]);
+
+  // Follow the answer while it streams in — unless the user scrolled up to read something.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!streaming || !el) return;
+    if (el.scrollHeight - el.scrollTop - el.clientHeight < 120) el.scrollTop = el.scrollHeight;
+  }, [streaming, last?.content]);
 
   useEffect(() => {
     const el = boxRef.current;
@@ -43,7 +55,7 @@ export default function ChatView({ repo, messages, loading, onSend, onOpenFile }
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="scroll-thin min-h-0 flex-1 overflow-y-auto">
+      <div ref={scrollRef} className="scroll-thin min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto flex max-w-3xl flex-col gap-6 px-4 py-8 sm:px-6">
           {messages.length === 0 && (
             <div className="animate-blurIn pt-10 text-center">
@@ -76,7 +88,8 @@ export default function ChatView({ repo, messages, loading, onSend, onOpenFile }
                 ) : (
                   <Markdown text={m.content} />
                 )}
-                {!!m.sources?.length && (
+                {m.streaming && <span className="mt-1 inline-block h-4 w-2 animate-pulse rounded-sm bg-accent align-middle" aria-hidden />}
+                {!!m.sources?.length && !m.streaming && (
                   <div className="mt-3 flex flex-wrap items-center gap-1.5">
                     <span className="mr-1 text-[11px] font-medium uppercase tracking-wider text-muted">Sources</span>
                     {m.sources.map((s) => (
@@ -92,7 +105,7 @@ export default function ChatView({ repo, messages, loading, onSend, onOpenFile }
             ),
           )}
 
-          {loading && (
+          {waiting && (
             <div className="flex items-center gap-2 text-sm text-muted animate-fadeIn">
               <span className="flex gap-1">
                 {[0, 1, 2].map((i) => (
@@ -129,9 +142,15 @@ export default function ChatView({ repo, messages, loading, onSend, onOpenFile }
             aria-label="Your question"
             className="scroll-thin max-h-40 min-h-[36px] flex-1 resize-none bg-transparent px-2 py-2 text-sm outline-none placeholder:text-muted/70"
           />
-          <button type="submit" disabled={!q.trim() || loading} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-accent-fill text-white transition-opacity disabled:opacity-30" aria-label="Send">
-            <ArrowUp size={18} />
-          </button>
+          {loading ? (
+            <button type="button" onClick={onStop} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-accent-fill text-white" aria-label="Stop generating" title="Stop">
+              <Square size={14} fill="currentColor" />
+            </button>
+          ) : (
+            <button type="submit" disabled={!q.trim()} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-accent-fill text-white transition-opacity disabled:opacity-30" aria-label="Send">
+              <ArrowUp size={18} />
+            </button>
+          )}
         </form>
         <p className="mx-auto mt-1.5 max-w-3xl text-center text-[11px] text-muted/80">Enter to send · Shift + Enter for a new line</p>
       </div>
