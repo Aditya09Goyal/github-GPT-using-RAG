@@ -12,9 +12,15 @@ export interface IndexRepoResponse {
   message: string;
 }
 
+export interface ChatTurn {
+  role: "user" | "assistant";
+  content: string;
+}
+
 export interface ChatRequest {
   question: string;
   collection_name: string;
+  history?: ChatTurn[]; // earlier messages, oldest first — lets follow-up questions work
 }
 
 export interface ChatResponse {
@@ -30,6 +36,7 @@ export interface ChatMessage {
   content: string;
   sources?: string[];
   error?: boolean;
+  streaming?: boolean; // answer is still arriving
   ms?: number; // response time
 }
 
