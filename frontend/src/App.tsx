@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Sidebar from "./components/Sidebar";
 import TabBar from "./components/TabBar";
 import ChatView from "./components/ChatView";
@@ -6,14 +6,22 @@ import FileView from "./components/FileView";
 import IndexPanel from "./components/IndexPanel";
 import StatusBar, { type ServerState } from "./components/StatusBar";
 import Logo from "./components/Logo";
-import { askQuestion, health } from "./api/client";
+import { health, streamQuestion } from "./api/client";
 import { load, save } from "./lib/storage";
 import { uid } from "./lib/repo";
-import type { ChatMessage, Repo } from "./types/api";
+import type { ChatMessage, ChatTurn, Repo } from "./types/api";
+
+// How many earlier messages are sent with each question (the backend trims further).
+const HISTORY_MESSAGES = 10;
 
 export default function App() {
   const [repos, setRepos] = useState<Repo[]>(() => load("ghgpt:repos", []));
-  const [chats, setChats] = useState<Record<string, ChatMessage[]>>(() => load("ghgpt:chats", {}));
+  const [chats, setChats] = useState<Record<string, ChatMessage[]>>(() =>
+    // an answer interrupted by a page reload is never going to finish
+    Object.fromEntries(
+      Object.entries(load<Record<string, ChatMessage[]>>("ghgpt:chats", {})).map(([k, v]) => [k, v.map(({ streaming: _s, ...m }) => m)]),
+    ),
+  );
   const [active, setActive] = useState<string | null>(() => load<string | null>("ghgpt:active", null));
   const [showNew, setShowNew] = useState(false);
   const [tabs, setTabs] = useState<string[]>([]);
@@ -22,6 +30,7 @@ export default function App() {
   const [menu, setMenu] = useState(false);
   const [server, setServer] = useState<ServerState>("checking");
   const [dark, setDark] = useState(() => document.documentElement.classList.contains("dark"));
+  const abortRef = useRef<AbortController | null>(null);
 
   const repo = repos.find((r) => r.name === active) ?? null;
   const messages = useMemo(() => (active ? chats[active] ?? [] : []), [chats, active]);
@@ -98,19 +107,59 @@ export default function App() {
   async function send(question: string) {
     if (!active) return;
     const name = active;
+    const history: ChatTurn[] = (chats[name] ?? [])
+      .filter((m) => !m.error && m.content.trim())
+      .slice(-HISTORY_MESSAGES)
+      .map((m) => ({ role: m.role, content: m.content }));
+
+    const answerId = uid();
     const add = (m: ChatMessage) => setChats((c) => ({ ...c, [name]: [...(c[name] ?? []), m] }));
+    // create the answer bubble on the first event, then keep patching it as tokens arrive
+    const patch = (fn: (m: ChatMessage) => ChatMessage) =>
+      setChats((c) => {
+        const list = c[name] ?? [];
+        const exists = list.some((m) => m.id === answerId);
+        const next = exists
+          ? list.map((m) => (m.id === answerId ? fn(m) : m))
+          : [...list, fn({ id: answerId, role: "assistant", content: "", streaming: true })];
+        return { ...c, [name]: next };
+      });
+
     add({ id: uid(), role: "user", content: question });
     setLoading(true);
+    const controller = new AbortController();
+    abortRef.current = controller;
     const t0 = performance.now();
     try {
-      const r = await askQuestion({ question, collection_name: name });
-      add({ id: uid(), role: "assistant", content: r.answer, sources: r.sources, ms: performance.now() - t0 });
+      await streamQuestion(
+        { question, collection_name: name, history },
+        {
+          onSources: (sources) => patch((m) => ({ ...m, sources })),
+          onToken: (text) => patch((m) => ({ ...m, content: m.content + text })),
+        },
+        controller.signal,
+      );
+      patch((m) => ({ ...m, streaming: false, ms: performance.now() - t0 }));
       setServer("online");
     } catch (e) {
-      add({ id: uid(), role: "assistant", content: e instanceof Error ? e.message : "Something went wrong.", error: true });
+      if (controller.signal.aborted) {
+        patch((m) => ({ ...m, streaming: false, content: m.content ? m.content + "\n\n_(stopped)_" : "_Stopped._" }));
+      } else {
+        const msg = e instanceof Error ? e.message : "Something went wrong.";
+        patch((m) =>
+          m.content
+            ? { ...m, streaming: false, content: `${m.content}\n\n_(Answer interrupted: ${msg})_` }
+            : { ...m, streaming: false, content: msg, error: true },
+        );
+      }
     } finally {
+      if (abortRef.current === controller) abortRef.current = null;
       setLoading(false);
     }
+  }
+
+  function stop() {
+    abortRef.current?.abort();
   }
 
   const sidebar = (onClose?: () => void) => (
@@ -196,7 +245,7 @@ export default function App() {
               <TabBar tabs={tabs} active={tab} onSelect={setTab} onClose={closeTab} onMenu={() => setMenu(true)} />
               <div className="min-h-0 flex-1">
                 {tab === "chat" ? (
-                  <ChatView repo={repo} messages={messages} loading={loading} onSend={send} onOpenFile={openFile} />
+                  <ChatView repo={repo} messages={messages} loading={loading} onSend={send} onStop={stop} onOpenFile={openFile} />
                 ) : (
                   <FileView key={tab} repo={repo} path={tab} />
                 )}
