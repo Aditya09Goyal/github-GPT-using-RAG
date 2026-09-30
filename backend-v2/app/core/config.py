@@ -32,7 +32,12 @@ class Settings(BaseSettings):
 
     # --- Retrieval ---
     retriever_top_k: int = 5
-        # --- CORS ---
+
+    # --- Conversation memory ---
+    history_max_messages: int = 6  # how many earlier messages (user + assistant) the LLM sees
+    history_max_chars: int = 1500  # long earlier answers are cut to this length to save tokens
+
+    # --- CORS ---
     cors_origins: str = "http://localhost:5173,http://localhost:3000"
 
     model_config = SettingsConfigDict(

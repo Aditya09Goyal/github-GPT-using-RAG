@@ -80,6 +80,8 @@ This technique is called **RAG (Retrieval-Augmented Generation)**. It prevents t
 - 💬 **Natural-language Q&A** about the codebase
 - 🔖 **Source citations** — every answer lists the files it was based on
 - 🎯 **Repo-scoped search** — each repo is stored in its own collection, so answers never mix repositories
+- ⚡ **Streaming answers** — the reply appears token by token, with a Stop button
+- 🧵 **Conversation memory** — follow-up questions ("where is *it* called?") are rewritten into standalone questions before searching, and recent messages are passed to the LLM
 - 🚫 **Hallucination guard** — the prompt forces the LLM to say _"I don't know"_ when the answer isn't in the code
 - 🧹 **Smart file filtering** — skips `node_modules`, build folders, binaries, lockfiles and files > 200 KB
 - 💾 **Persistent index** — once indexed, a repo stays searchable (stored in Postgres)
@@ -241,7 +243,7 @@ npm run dev
 | `backend-v2/.env` | `CORS_ORIGINS`      | ✅       | `https://your-app.vercel.app,http://localhost:3000`              |
 | `frontend/.env`   | `VITE_API_BASE_URL` | ✅       | `http://localhost:8000` (no trailing `/`)                        |
 
-Other tunables in `config.py` (can also be set as env vars): `CHUNK_SIZE` (1000), `CHUNK_OVERLAP` (200), `RETRIEVER_TOP_K` (5), `EMBEDDING_MODEL_NAME`.
+Other tunables in `config.py` (can also be set as env vars): `CHUNK_SIZE` (1000), `CHUNK_OVERLAP` (200), `RETRIEVER_TOP_K` (5), `HISTORY_MAX_MESSAGES` (6), `HISTORY_MAX_CHARS` (1500), `EMBEDDING_MODEL_NAME`.
 
 > Never commit `.env` files — they are already in `.gitignore`.
 
@@ -253,6 +255,7 @@ Other tunables in `config.py` (can also be set as env vars): `CHUNK_SIZE` (1000)
 | ------ | --------- | --------------------------------------------- |
 | `POST` | `/repos`  | Download, chunk, embed and store a repository |
 | `POST` | `/chat`   | Ask a question about an indexed repository    |
+| `POST` | `/chat/stream` | Same as `/chat`, streamed as Server-Sent Events |
 | `GET`  | `/health` | Liveness check → `{"status": "ok"}`           |
 
 **Index a repo**
@@ -286,6 +289,31 @@ curl -X POST https://github-gpt-api-c13y.onrender.com/chat \
   "sources": ["README"]
 }
 ```
+
+**Follow-up questions & streaming**
+
+Both chat endpoints accept an optional `history` (earlier messages, oldest first). `/chat/stream` returns `text/event-stream`:
+
+```bash
+curl -N -X POST https://github-gpt-api-c13y.onrender.com/chat/stream \
+  -H "Content-Type: application/json" \
+  -d '{"question": "Where is it used?", "collection_name": "hello-world",
+       "history": [{"role": "user", "content": "What is in the README?"},
+                   {"role": "assistant", "content": "It just says Hello World!"}]}'
+```
+
+```text
+event: sources
+data: {"sources": ["README"]}
+
+event: token
+data: {"content": "The"}
+...
+event: done
+data: {}
+```
+
+If something fails after streaming has started, an `event: error` with `{"detail": "..."}` is sent instead of `done`.
 
 | Status | Meaning                                                 |
 | ------ | ------------------------------------------------------- |
@@ -336,7 +364,7 @@ Measured on the production Docker image with a 512 MB memory limit:
 ## ⚠️ Limitations
 
 - Public GitHub repositories only (private repo support is planned).
-- Each question is answered independently (no chat memory yet).
+- Conversation memory only covers the last few messages, and follow-ups cost one extra (small) LLM call to rewrite the question.
 - A collection name can't be reused; there is no delete/re-index button yet.
 - Very large repositories take a long time to index on the free tier.
 
@@ -344,8 +372,6 @@ Measured on the production Docker image with a 512 MB memory limit:
 
 ## 🔮 Future Enhancements
 
-- ⚡ **Streaming answers** — show the response token by token
-- 🧵 **Conversation memory** — understand follow-up questions
 - 📍 **Line-level citations** — clickable `file.py#L10-L40` links to GitHub
 - 📚 **Repo library** — list, switch, delete and re-index repositories
 - 🧠 **Code-aware chunking** — split on functions/classes per language
