@@ -8,7 +8,7 @@ import StatusBar, { type ServerState } from "./components/StatusBar";
 import Logo from "./components/Logo";
 import { ApiError, health, listRepos, loginUrl, removeRepo as removeRepoApi, streamQuestion } from "./api/client";
 import { clearToken, consumeLoginRedirect, getToken, userFromToken } from "./lib/auth";
-import { Github } from "lucide-react";
+import { Database, Github, MessageSquareText, Sparkles } from "lucide-react";
 import { load, save } from "./lib/storage";
 import { parseGithubUrl, uid } from "./lib/repo";
 import type { ChatMessage, ChatTurn, Repo, User } from "./types/api";
@@ -254,51 +254,67 @@ export default function App() {
                 <Logo className="h-6 w-6" />
                 <span className="font-extrabold tracking-tight">GitHub-GPT</span>
               </div>
-              <div className="scroll-thin flex flex-1 items-center justify-center overflow-y-auto px-4 py-10">
-                <div className="w-full max-w-2xl animate-blurIn text-center">
-                  <Logo className="mx-auto h-12 w-12" />
-                  <h1 className="mt-5 text-3xl font-extrabold tracking-tight sm:text-4xl">
-                    Chat with any <span className="brand-shine animate-shine">GitHub repository</span>
-                  </h1>
-                  <p className="mx-auto mt-3 max-w-lg text-[15px] text-muted">
-                    Paste a public repo. GitHub-GPT reads its code, and answers your questions using only the real files — with sources you can open.
-                  </p>
-                  <div className="mx-auto mt-8 max-w-xl text-left">
-                    {user ? (
-                      <IndexPanel user={user} onIndexed={onIndexed} onAuthExpired={() => logout("Your login expired — sign in again.")} autoFocus />
-                    ) : (
-                      <div className="flex flex-col items-center gap-3">
-                        <a
-                          href={loginUrl}
-                          className="flex items-center gap-2 rounded-xl bg-accent-fill px-5 py-3 text-sm font-semibold text-white shadow-sm transition-opacity hover:opacity-90"
-                        >
-                          <Github size={18} /> Sign in with GitHub
-                        </a>
-                        <p className="text-xs text-muted">Sign in to index repositories. We only read your public profile.</p>
-                        {authError && <p className="text-xs text-bad">{authError}</p>}
+              <div className="relative flex min-h-0 flex-1">
+                <div className="aurora" aria-hidden />
+                <div className="dot-grid" aria-hidden />
+                <div className="scroll-thin relative flex flex-1 justify-center overflow-y-auto px-4 py-10">
+                  {/* my-auto (not items-center) so tall content scrolls instead of being cut off at the top on phones */}
+                  <div className="my-auto w-full max-w-2xl animate-blurIn text-center">
+                    <div className="mx-auto w-fit animate-float">
+                      <div className="rounded-2xl animate-glow">
+                        <Logo className="h-14 w-14" />
                       </div>
+                    </div>
+                    <h1 className="mt-6 text-3xl font-extrabold tracking-tight sm:text-5xl">
+                      Chat with any <span className="text-gradient whitespace-nowrap">GitHub repository</span>
+                    </h1>
+                    <p className="mx-auto mt-4 max-w-lg text-[15px] leading-relaxed text-muted">
+                      Paste a public repo. GitHub-GPT reads its code, and answers your questions using only the real files — with sources you can open.
+                    </p>
+                    <div className="mx-auto mt-8 max-w-xl text-left">
+                      {user ? (
+                        <IndexPanel user={user} onIndexed={onIndexed} onAuthExpired={() => logout("Your login expired — sign in again.")} autoFocus />
+                      ) : (
+                        <div className="flex flex-col items-center gap-3 animate-popIn">
+                          <a href={loginUrl} className="btn-primary px-6 py-3 text-[15px]">
+                            <Github size={19} /> Sign in with GitHub
+                          </a>
+                          <p className="text-xs text-muted">Free · we only read your public GitHub profile.</p>
+                          {authError && <p className="rounded-lg border border-bad/40 bg-bad/10 px-3 py-1.5 text-xs text-bad animate-popIn">{authError}</p>}
+                        </div>
+                      )}
+                    </div>
+                    <div className="mx-auto mt-12 grid max-w-xl gap-3 text-left sm:grid-cols-3">
+                      {(
+                        [
+                          [Database, "Index", "Code is split into chunks and embedded into pgvector."],
+                          [MessageSquareText, "Ask", "Your question finds the 8 most relevant chunks."],
+                          [Sparkles, "Answer", "Groq's LLM answers from them and cites the files."],
+                        ] as const
+                      ).map(([Icon, t, d], i) => (
+                        <div
+                          key={t}
+                          className="lift group relative overflow-hidden rounded-xl border border-line bg-panel/80 p-4 shadow-sm backdrop-blur animate-popIn"
+                          style={{ animationDelay: `${150 + i * 90}ms` }}
+                        >
+                          <span className="absolute inset-x-0 top-0 h-0.5 origin-left scale-x-0 bg-gradient-to-r from-accent-fill to-accent-2 transition-transform duration-300 group-hover:scale-x-100" />
+                          <div className="flex items-center gap-2 text-sm font-semibold">
+                            <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-accent-soft text-accent transition-transform duration-300 group-hover:rotate-6 group-hover:scale-110">
+                              <Icon size={15} />
+                            </span>
+                            <span className="font-mono text-[11px] text-muted">0{i + 1}</span>
+                            {t}
+                          </div>
+                          <p className="mt-2 text-xs leading-relaxed text-muted">{d}</p>
+                        </div>
+                      ))}
+                    </div>
+                    {repo && showNew && (
+                      <button onClick={() => setShowNew(false)} className="mt-6 text-sm text-muted underline-offset-4 transition-colors hover:text-text hover:underline">
+                        ← Back to {repo.repo}
+                      </button>
                     )}
                   </div>
-                  <div className="mx-auto mt-10 grid max-w-xl gap-3 text-left sm:grid-cols-3">
-                    {[
-                      ["1", "Index", "Code is split into chunks and embedded into pgvector."],
-                      ["2", "Ask", "Your question finds the 8 most relevant chunks."],
-                      ["3", "Answer", "Groq's LLM answers from them and cites the files."],
-                    ].map(([n, t, d]) => (
-                      <div key={n} className="rounded-xl border border-line bg-panel p-3.5 shadow-sm">
-                        <div className="flex items-center gap-2 text-sm font-semibold">
-                          <span className="flex h-5 w-5 items-center justify-center rounded-md bg-accent-soft font-mono text-[11px] text-accent">{n}</span>
-                          {t}
-                        </div>
-                        <p className="mt-1.5 text-xs leading-relaxed text-muted">{d}</p>
-                      </div>
-                    ))}
-                  </div>
-                  {repo && showNew && (
-                    <button onClick={() => setShowNew(false)} className="mt-6 text-sm text-muted underline-offset-4 hover:text-text hover:underline">
-                      ← Back to {repo.repo}
-                    </button>
-                  )}
                 </div>
               </div>
             </div>

@@ -48,6 +48,27 @@ def has_repo(login: str, collection_name: str) -> bool:
         )
 
 
+def access(login: str, collection_name: str) -> tuple[bool, bool]:
+    """
+    (repo is in this user's list, repo has vectors) — both answered in ONE round trip,
+    because every chat request checks them.
+    """
+    sql = text(
+        """
+        SELECT
+          EXISTS (SELECT 1 FROM user_repos WHERE login = :login AND collection_name = :name),
+          EXISTS (
+            SELECT 1 FROM langchain_pg_embedding e
+            JOIN langchain_pg_collection c ON c.uuid = e.collection_id
+            WHERE c.name = :name
+          )
+        """
+    )
+    with _engine.connect() as conn:
+        row = conn.execute(sql, {"login": login, "name": collection_name}).first()
+    return bool(row[0]), bool(row[1])
+
+
 def add_repo(login: str, collection_name: str, repo_url: str, files: int, chunks: int) -> None:
     with _engine.begin() as conn:
         conn.execute(

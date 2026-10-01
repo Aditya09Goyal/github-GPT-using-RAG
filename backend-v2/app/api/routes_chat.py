@@ -8,18 +8,18 @@ from app.core.logging import get_logger
 from app.schemas.chat import ChatRequest, ChatResponse
 from app.services.rag_chain import answer_question, stream_answer
 from app.services import user_repos
-from app.services.vectorstore import collection_exists
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/chat", tags=["chat"])
 
 
 def _ensure_collection(collection_name: str, login: str) -> None:
-    if not user_repos.has_repo(login, collection_name):
+    in_list, has_vectors = user_repos.access(login, collection_name)
+    if not in_list:
         raise HTTPException(
             status_code=403, detail="This repo isn't in your list — add it first."
         )
-    if not collection_exists(collection_name):
+    if not has_vectors:
         raise HTTPException(
             status_code=404,
             detail=f"Collection '{collection_name}' not found. Index it first via POST /repos.",

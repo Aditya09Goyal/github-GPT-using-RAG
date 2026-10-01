@@ -38,6 +38,11 @@ class Settings(BaseSettings):
     max_chunks: int = 8000  # same idea for total chunks — keeps embedding time and DB size sane
     embed_batch_size: int = 64  # chunks embedded + saved per step (smaller = less RAM, more progress updates)
 
+    # --- LLM ---
+    llm_model: str = "openai/gpt-oss-120b"  # writes the answers
+    llm_reasoning_effort: str = "low"  # gpt-oss thinks before answering; "low" = first token much sooner
+    condense_model: str = "openai/gpt-oss-20b"  # only rewrites follow-up questions (small + fast)
+
     # --- Retrieval ---
     retriever_top_k: int = 8
 

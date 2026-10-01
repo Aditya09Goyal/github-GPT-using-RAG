@@ -1,3 +1,5 @@
+import threading
+
 from langchain_postgres import PGVector
 from langchain_core.documents import Document
 from sqlalchemy import create_engine, text
@@ -33,19 +35,89 @@ _engine = create_engine(
 )
 
 
+# Building a PGVector runs CREATE EXTENSION + create tables + create collection against the DB,
+# so it is built once per collection and reused (was 2-3 times per question before).
+_stores: dict[str, PGVector] = {}
+_overviews: dict[str, Document | None] = {}
+_cache_lock = threading.Lock()
+
+OVERVIEW_SOURCE = "__overview__"
+
+
+def _forget(*names: str) -> None:
+    """Drop cached store/overview after a collection is deleted, renamed or re-indexed."""
+    with _cache_lock:
+        for n in names:
+            _stores.pop(n, None)
+            _overviews.pop(n, None)
+
+
 def get_vectorstore(collection_name: str) -> PGVector:
     """
-    Returns a pgvector-backed store for one repo.
+    Returns a pgvector-backed store for one repo (cached per collection).
     All repos live in the same two tables (langchain_pg_collection, langchain_pg_embedding);
-    collection_name keeps each repo's chunks separate, just like Chroma collections did.
+    collection_name keeps each repo's chunks separate.
     """
-    return PGVector(
-        embeddings=get_embedding_model(),
-        collection_name=collection_name,
-        connection=_engine,
-        embedding_length=EMBEDDING_DIM,
-        use_jsonb=True,
+    store = _stores.get(collection_name)
+    if store is None:
+        with _cache_lock:
+            store = _stores.get(collection_name)
+            if store is None:
+                store = PGVector(
+                    embeddings=get_embedding_model(),
+                    collection_name=collection_name,
+                    connection=_engine,
+                    embedding_length=EMBEDDING_DIM,
+                    use_jsonb=True,
+                )
+                _stores[collection_name] = store
+    return store
+
+
+def get_overview_doc(collection_name: str) -> Document | None:
+    """
+    The repo overview chunk, fetched with one plain SQL query (no embedding, no vector search)
+    and cached in memory. Repos indexed before the overview existed return None.
+    """
+    if collection_name in _overviews:
+        return _overviews[collection_name]
+    query = text(
+        """
+        SELECT e.document, e.cmetadata
+        FROM langchain_pg_embedding e
+        JOIN langchain_pg_collection c ON c.uuid = e.collection_id
+        WHERE c.name = :name AND e.cmetadata->>'source' = :source
+        LIMIT 1
+        """
     )
+    with _engine.connect() as conn:
+        row = conn.execute(query, {"name": collection_name, "source": OVERVIEW_SOURCE}).first()
+    doc = Document(page_content=row[0], metadata=dict(row[1] or {})) if row else None
+    with _cache_lock:
+        _overviews[collection_name] = doc
+    return doc
+
+
+def similarity_search(collection_name: str, query: str, k: int) -> list[Document]:
+    """
+    Top-k cosine search in ONE SQL round trip (same ordering as PGVector's default cosine search).
+    Going through PGVector here cost extra round trips per question (collection lookup, and on the
+    first question for a repo also CREATE EXTENSION / tables / collection) — slow against a remote DB.
+    """
+    vec = "[" + ",".join(f"{x:.7f}" for x in get_embedding_model().embed_query(query)) + "]"
+    sql = text(
+        """
+        SELECT e.document, e.cmetadata
+        FROM langchain_pg_embedding e
+        JOIN langchain_pg_collection c ON c.uuid = e.collection_id
+        WHERE c.name = :name
+        ORDER BY e.embedding <=> CAST(:vec AS vector)
+        LIMIT :k
+        """
+    )
+    with _engine.connect() as conn:
+        rows = conn.execute(sql, {"name": collection_name, "vec": vec, "k": k}).all()
+    return [Document(page_content=r[0], metadata=dict(r[1] or {})) for r in rows]
 
 
 def add_chunks_to_store(
@@ -84,6 +156,7 @@ def delete_collection(collection_name: str) -> None:
     """
     Removes a collection and all its vectors (embeddings are deleted by ON DELETE CASCADE).
     """
+    _forget(collection_name)
     try:
         with _engine.begin() as conn:
             conn.execute(
@@ -107,6 +180,7 @@ def rename_collection(old: str, new: str) -> None:
             text("UPDATE langchain_pg_collection SET name = :new WHERE name = :old"),
             {"new": new, "old": old},
         )
+    _forget(old, new)
 
 
 def collection_exists(collection_name: str) -> bool:

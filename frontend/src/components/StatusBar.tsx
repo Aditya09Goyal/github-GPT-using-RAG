@@ -14,7 +14,10 @@ export default function StatusBar({ server, repo }: { server: ServerState; repo:
   return (
     <footer className="flex items-center gap-4 border-t border-line bg-side px-3 py-1 font-mono text-[11px] text-muted">
       <span className="flex items-center gap-1.5">
-        <span className={`h-2 w-2 rounded-full ${dot}`} />
+        <span className="relative flex h-2 w-2">
+          {server === "online" && <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-ok opacity-60" />}
+          <span className={`relative inline-flex h-2 w-2 rounded-full ${dot}`} />
+        </span>
         {label}
       </span>
       {repo && (

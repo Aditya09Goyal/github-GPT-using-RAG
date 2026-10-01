@@ -39,6 +39,11 @@ async def on_startup():
 
     ensure_table()  # per-user repo lists
 
+    # load the ONNX embedding model now, not on the first question after a (cold) start
+    from app.services.embeddings import get_embedding_model
+
+    get_embedding_model()
+
 
 @app.get("/health")
 def health_check():

@@ -6,11 +6,11 @@ from pathlib import Path
 from app.core.config import settings
 from app.core.logging import get_logger
 
-logger = get_logger(__name__)
+# Special "file" name for the repo overview chunk (defined in vectorstore, re-exported here).
+# It is always added to the LLM context, but never shown as a source chip.
+from app.services.vectorstore import OVERVIEW_SOURCE
 
-# Special "file" name for the repo overview chunk. It is always added to the LLM context,
-# but never shown as a source chip (it isn't a real file in the repo).
-OVERVIEW_SOURCE = "__overview__"
+logger = get_logger(__name__)
 
 README_NAMES = ("README.md", "readme.md", "Readme.md", "README", "README.txt")
 

@@ -1,3 +1,4 @@
+import time
 from collections.abc import Iterator
 
 from langchain_groq import ChatGroq
@@ -17,6 +18,8 @@ logger = get_logger(__name__)
 # Cached at module level — same reasoning as the embedding model:
 # don't recreate the LLM client on every single request.
 _llm: ChatGroq | None = None
+_condense_llm: ChatGroq | None = None
+_condense_broken = False  # set after the small model fails once, so we don't pay for the failure every time
 
 NO_CONTEXT_ANSWER = "Ummn, Will improve myself for such bad results😓."
 
@@ -42,13 +45,32 @@ Standalone question:"""
 def get_llm() -> ChatGroq:
     global _llm
     if _llm is None:
-        logger.info("Initializing Groq LLM client")
+        logger.info(f"Initializing Groq LLM client ({settings.llm_model})")
+        extra = {}
+        # reasoning_effort only exists for reasoning models (gpt-oss, qwen3) on Groq
+        if settings.llm_reasoning_effort and "gpt-oss" in settings.llm_model:
+            extra["reasoning_effort"] = settings.llm_reasoning_effort
         _llm = ChatGroq(
-            model="openai/gpt-oss-120b",
+            model=settings.llm_model,
             groq_api_key=settings.groq_api_key,
             temperature=0.2,
+            **extra,
         )
     return _llm
+
+
+def get_condense_llm() -> ChatGroq:
+    """Small, fast model used only to rewrite follow-up questions."""
+    global _condense_llm
+    if _condense_llm is None:
+        extra = {"reasoning_effort": "low"} if "gpt-oss" in settings.condense_model else {}
+        _condense_llm = ChatGroq(
+            model=settings.condense_model,
+            groq_api_key=settings.groq_api_key,
+            temperature=0,
+            **extra,
+        )
+    return _condense_llm
 
 
 def format_context(docs: list[Document]) -> str:
@@ -98,16 +120,23 @@ def condense_question(question: str, history: list[ChatTurn]) -> str:
     Falls back to the original question if the LLM call fails or returns nothing.
     """
     transcript = "\n".join(f"{t.role.capitalize()}: {t.content}" for t in history)
-    chain = (
-        ChatPromptTemplate.from_template(CONDENSE_PROMPT)
-        | get_llm()
-        | StrOutputParser()
-    )
+    prompt = ChatPromptTemplate.from_template(CONDENSE_PROMPT)
+    inputs = {"history": transcript, "question": question}
+    global _condense_broken
     try:
-        standalone = chain.invoke({"history": transcript, "question": question}).strip()
-    except Exception:
-        logger.exception("Condensing the follow-up question failed — using it as-is.")
-        return question
+        if _condense_broken:
+            raise RuntimeError("small model disabled after an earlier failure")
+        standalone = (prompt | get_condense_llm() | StrOutputParser()).invoke(inputs).strip()
+    except Exception as e:
+        # e.g. the small model was retired on Groq — fall back to the main model (and stop trying the small one)
+        if not _condense_broken:
+            logger.warning(f"Condense model '{settings.condense_model}' failed ({e}) — using the main model from now on.")
+            _condense_broken = True
+        try:
+            standalone = (prompt | get_llm() | StrOutputParser()).invoke(inputs).strip()
+        except Exception:
+            logger.exception("Condensing the follow-up question failed — using it as-is.")
+            return question
     if standalone:
         logger.info(f"Condensed follow-up '{question}' -> '{standalone}'")
     return standalone or question
@@ -119,13 +148,20 @@ def _prepare(question: str, collection_name: str, history: list[ChatTurn] | None
     and retrieve the relevant chunks.
     """
     history = _trim_history(history)
+    t0 = time.perf_counter()
     search_query = condense_question(question, history) if history else question
+    t1 = time.perf_counter()
     docs = [
         d
         for d in retrieve_relevant_chunks(search_query, collection_name)
         if d.metadata.get("source") != OVERVIEW_SOURCE
     ]
+    t2 = time.perf_counter()
     overview = get_overview(collection_name)
+    t3 = time.perf_counter()
+    logger.info(
+        f"[timing] condense {1000 * (t1 - t0):.0f} ms · retrieve {1000 * (t2 - t1):.0f} ms · overview {1000 * (t3 - t2):.0f} ms"
+    )
     if overview:
         docs = [
             overview
@@ -184,6 +220,7 @@ def stream_answer(
       {"type": "token", "content": "..."}    — many times, pieces of the answer
     The caller is responsible for sending a final "done" event.
     """
+    start = time.perf_counter()
     history, docs = _prepare(question, collection_name, history)
 
     if not docs:
@@ -197,6 +234,7 @@ def stream_answer(
     logger.info(
         f"Streaming LLM answer for question: '{question}' ({len(history)} history messages)"
     )
+    first = None
     for piece in _answer_chain().stream(
         {
             "context": format_context(docs),
@@ -205,4 +243,10 @@ def stream_answer(
         }
     ):
         if piece:
+            if first is None:
+                first = time.perf_counter()
             yield {"type": "token", "content": piece}
+    end = time.perf_counter()
+    logger.info(
+        f"[timing] first token {1000 * ((first or end) - start):.0f} ms · total {1000 * (end - start):.0f} ms"
+    )

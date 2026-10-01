@@ -14,9 +14,9 @@ export default function TabBar({ tabs, active, onSelect, onClose, onMenu }: Prop
     return (
       <div
         key={id}
-        className={`group relative flex shrink-0 items-center gap-1.5 border-r border-line px-3 py-2.5 text-[12.5px] ${on ? "bg-bg text-text" : "text-muted hover:text-text"}`}
+        className={`group relative flex shrink-0 items-center gap-1.5 border-r border-line px-3 py-2.5 text-[12.5px] transition-colors ${on ? "bg-bg text-text" : "text-muted hover:bg-bg/50 hover:text-text"}`}
       >
-        {on && <span className="absolute inset-x-0 top-0 h-0.5 bg-accent" />}
+        {on && <span className="absolute inset-x-0 top-0 h-0.5 animate-fadeIn bg-gradient-to-r from-accent-fill to-accent-2" />}
         <button onClick={() => onSelect(id)} className="flex items-center gap-1.5" title={id === "chat" ? "Chat" : id}>
           {icon}
           <span className={id === "chat" ? "font-medium" : "font-mono"}>{label}</span>

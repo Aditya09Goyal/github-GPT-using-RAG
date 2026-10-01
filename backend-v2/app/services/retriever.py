@@ -3,7 +3,7 @@ from langchain_core.documents import Document
 
 from app.core.config import settings
 from app.core.logging import get_logger
-from app.services.vectorstore import get_vectorstore
+from app.services.vectorstore import get_overview_doc, get_vectorstore, similarity_search
 
 logger = get_logger(__name__)
 
@@ -32,8 +32,7 @@ def retrieve_relevant_chunks(
     Returns the raw Documents (text + metadata) — formatting them into a
     prompt is the next file's (rag_chain.py) job, not this one.
     """
-    retriever = get_retriever(collection_name, top_k)
-    results = retriever.invoke(query)
+    results = similarity_search(collection_name, query, top_k or settings.retriever_top_k)
 
     logger.info(
         f"Retrieved {len(results)} chunks for query: '{query}' (collection: {collection_name})"
@@ -49,15 +48,10 @@ def retrieve_relevant_chunks(
 def get_overview(collection_name: str) -> Document | None:
     """
     Fetches the repo overview chunk (description, contributors, file list, README start).
-    Repos indexed before the overview existed simply return None.
+    Plain SQL + in-memory cache. Repos indexed before the overview existed return None.
     """
-    from app.services.overview import OVERVIEW_SOURCE
-
     try:
-        docs = get_vectorstore(collection_name).similarity_search(
-            "repository overview", k=1, filter={"source": OVERVIEW_SOURCE}
-        )
-        return docs[0] if docs else None
+        return get_overview_doc(collection_name)
     except Exception:
         logger.exception("Could not load the repo overview")
         return None

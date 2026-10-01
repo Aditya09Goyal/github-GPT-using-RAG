@@ -75,8 +75,10 @@ export default function Sidebar(p: Props) {
 
   return (
     <aside className="flex h-full w-72 flex-col border-r border-line bg-side">
-      <div className="flex items-center gap-2.5 px-4 pb-3 pt-4">
-        <Logo />
+      <div className="group/logo flex items-center gap-2.5 px-4 pb-3 pt-4">
+        <span className="transition-transform duration-300 group-hover/logo:-rotate-6 group-hover/logo:scale-110">
+          <Logo />
+        </span>
         <span className="brand-shine animate-shine text-[17px] font-extrabold tracking-tight">GitHub-GPT</span>
         {p.onClose && (
           <button onClick={p.onClose} className="ml-auto rounded-md p-1 text-muted hover:text-text md:hidden" aria-label="Close menu">
@@ -86,19 +88,29 @@ export default function Sidebar(p: Props) {
       </div>
 
       <div className="px-3">
-        <button onClick={p.onNew} className="flex w-full items-center gap-2 rounded-xl border border-line bg-panel px-3 py-2 text-sm font-medium shadow-sm hover:border-accent">
-          <Plus size={16} /> New repository
+        <button onClick={p.onNew} className="lift group flex w-full items-center gap-2 rounded-xl border border-line bg-panel px-3 py-2 text-sm font-medium shadow-sm">
+          <span className="flex h-5 w-5 items-center justify-center rounded-md bg-gradient-to-br from-accent-fill to-accent-2 text-white transition-transform duration-300 group-hover:rotate-90">
+            <Plus size={14} />
+          </span>
+          New repository
         </button>
       </div>
 
       <div className="scroll-thin mt-4 min-h-0 flex-1 overflow-y-auto px-3 pb-3">
         <div className="px-1 pb-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted/80">Repositories</div>
-        {p.repos.length === 0 && <p className="px-1 text-xs text-muted">No repositories yet. Index one to start.</p>}
-        {p.repos.map((r) => {
+        {p.repos.length === 0 && <p className="px-1 text-xs text-muted animate-fadeIn">No repositories yet. Index one to start.</p>}
+        {p.repos.map((r, i) => {
           const on = r.name === p.active;
           return (
-            <div key={r.name} className="mb-0.5">
-              <div className={`group flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm ${on ? "bg-panel shadow-sm ring-1 ring-line" : "hover:bg-line/50"}`}>
+            <div key={r.name} className="mb-0.5 animate-popIn" style={{ animationDelay: `${i * 40}ms` }}>
+              <div
+                className={`group relative flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm transition-all duration-200 ${
+                  on ? "bg-panel shadow-sm ring-1 ring-line" : "hover:translate-x-0.5 hover:bg-line/50"
+                }`}
+              >
+                <span
+                  className={`absolute -left-1 top-1.5 bottom-1.5 w-1 rounded-full bg-gradient-to-b from-accent-fill to-accent-2 transition-transform duration-300 ${on ? "scale-y-100" : "scale-y-0"}`}
+                />
                 <button onClick={() => p.onSelect(r.name)} className="flex min-w-0 flex-1 items-center gap-2 text-left">
                   <Github size={14} className={on ? "text-accent" : "text-muted"} />
                   <span className="truncate">
@@ -127,14 +139,22 @@ export default function Sidebar(p: Props) {
       </div>
 
       {p.user && (
-        <div className="flex items-center gap-2 border-t border-line px-4 py-2.5">
-          {p.user.avatar_url && <img src={p.user.avatar_url} alt="" className="h-7 w-7 rounded-full border border-line" />}
+        <div className="flex items-center gap-2.5 border-t border-line px-4 py-2.5 animate-fadeIn">
+          <span className="rounded-full bg-gradient-to-br from-accent-fill to-accent-2 p-[2px]">
+            {p.user.avatar_url ? (
+              <img src={p.user.avatar_url} alt="" className="h-7 w-7 rounded-full border-2 border-side" />
+            ) : (
+              <span className="flex h-7 w-7 items-center justify-center rounded-full border-2 border-side bg-panel text-xs font-bold text-accent">
+                {p.user.login.slice(0, 1).toUpperCase()}
+              </span>
+            )}
+          </span>
           <div className="min-w-0 flex-1 leading-tight">
             <div className="truncate text-sm font-medium">{p.user.name}</div>
             <div className="truncate font-mono text-[11px] text-muted">@{p.user.login}</div>
           </div>
-          <button onClick={p.onLogout} className="rounded-md p-1.5 text-muted hover:bg-line/50 hover:text-bad" aria-label="Sign out" title="Sign out">
-            <LogOut size={14} />
+          <button onClick={p.onLogout} className="group rounded-md p-1.5 text-muted transition-colors hover:bg-bad/10 hover:text-bad" aria-label="Sign out" title="Sign out">
+            <LogOut size={14} className="transition-transform duration-200 group-hover:translate-x-0.5" />
           </button>
         </div>
       )}
