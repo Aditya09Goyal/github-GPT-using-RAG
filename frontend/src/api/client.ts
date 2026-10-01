@@ -1,4 +1,4 @@
-import type { IndexRepoRequest, IndexJob, ChatRequest, ChatResponse, User } from "../types/api";
+import type { Citation, IndexRepoRequest, IndexJob, ChatRequest, ChatResponse, User } from "../types/api";
 import { getToken } from "../lib/auth";
 
 const BASE_URL = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, "") ?? "";
@@ -92,7 +92,8 @@ export async function removeRepo(name: string): Promise<void> {
 }
 
 export interface StreamHandlers {
-  onSources: (sources: string[]) => void;
+  // citations is empty when talking to an older backend
+  onSources: (sources: string[], citations: Citation[]) => void;
   onToken: (text: string) => void;
 }
 
@@ -140,7 +141,7 @@ export async function streamQuestion(body: ChatRequest, handlers: StreamHandlers
       }
       const data = dataLines.length ? JSON.parse(dataLines.join("\n")) : {};
 
-      if (event === "sources") handlers.onSources(data.sources ?? []);
+      if (event === "sources") handlers.onSources(data.sources ?? [], data.citations ?? []);
       else if (event === "token") handlers.onToken(data.content ?? "");
       else if (event === "error") throw new ApiError(data.detail ?? "Something went wrong.", 500);
       else if (event === "done") return;

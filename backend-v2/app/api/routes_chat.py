@@ -37,7 +37,9 @@ def chat(request: ChatRequest, user: dict = Depends(current_user)):
         result = answer_question(
             request.question, request.collection_name, request.history
         )
-        return ChatResponse(answer=result["answer"], sources=result["sources"])
+        return ChatResponse(
+            answer=result["answer"], sources=result["sources"], citations=result["citations"]
+        )
 
     except Exception as e:
         logger.exception(
@@ -54,7 +56,7 @@ def _sse(event: str, data: dict) -> str:
 def chat_stream(request: ChatRequest, user: dict = Depends(current_user)):
     """
     Same as POST /chat, but streams the answer as Server-Sent Events:
-      event: sources  data: {"sources": [...]}
+      event: sources  data: {"sources": [...], "citations": [{"path", "start_line", "end_line"}, ...]}
       event: token    data: {"content": "..."}   (repeated)
       event: done     data: {}
       event: error    data: {"detail": "..."}    (instead of done, if something fails mid-way)

@@ -6,12 +6,14 @@ import FileView from "./components/FileView";
 import IndexPanel from "./components/IndexPanel";
 import StatusBar, { type ServerState } from "./components/StatusBar";
 import Logo from "./components/Logo";
-import { ApiError, health, listRepos, loginUrl, removeRepo as removeRepoApi, streamQuestion } from "./api/client";
+import { Toaster, toast } from "react-hot-toast";
+import { ApiError, health, indexRepo, listRepos, loginUrl, removeRepo as removeRepoApi, streamQuestion } from "./api/client";
 import { clearToken, consumeLoginRedirect, getToken, userFromToken } from "./lib/auth";
 import { Database, Github, MessageSquareText, Sparkles } from "lucide-react";
 import { load, save } from "./lib/storage";
 import { parseGithubUrl, uid } from "./lib/repo";
-import type { ChatMessage, ChatTurn, Repo, User } from "./types/api";
+import { hasLines } from "./lib/citations";
+import type { ChatMessage, ChatTurn, Citation, LineFocus, ReindexState, Repo, User } from "./types/api";
 
 // runs once, before the first render: picks up  /#token=...  after GitHub login
 const loginRedirect = consumeLoginRedirect();
@@ -42,6 +44,9 @@ export default function App() {
   const [menu, setMenu] = useState(false);
   const [server, setServer] = useState<ServerState>("checking");
   const [dark, setDark] = useState(() => document.documentElement.classList.contains("dark"));
+  const [collapsed, setCollapsed] = useState(() => load<boolean>("ghgpt:sidebar-collapsed", false));
+  const [focus, setFocus] = useState<Record<string, LineFocus | null>>({}); // cited lines per open file tab
+  const [reindexing, setReindexing] = useState<Record<string, ReindexState>>({});
   const abortRef = useRef<AbortController | null>(null);
 
   const repo = repos.find((r) => r.name === active) ?? null;
@@ -55,6 +60,18 @@ export default function App() {
   useEffect(() => {
     if (user) save(key("active"), active);
   }, [active, user]);
+  useEffect(() => save("ghgpt:sidebar-collapsed", collapsed), [collapsed]);
+
+  // "[" toggles the sidebar (like Linear) — but never while typing
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (e.key !== "[" || e.metaKey || e.ctrlKey || e.altKey || t?.closest("input, textarea, [contenteditable]")) return;
+      setCollapsed((c) => !c);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
   useEffect(() => {
     if (!user) return;
     const trimmed = Object.fromEntries(Object.entries(chats).map(([k, v]) => [k, v.slice(-60)]));
@@ -138,15 +155,48 @@ export default function App() {
     }
   }
 
-  const openFile = useCallback((path: string) => {
+  // range: lines to scroll to and highlight; without one (e.g. from the file tree) the file opens at the top
+  const openFile = useCallback((path: string, range?: { start: number; end: number }) => {
     setTabs((t) => (t.includes(path) ? t : [...t, path]));
+    setFocus((f) => ({ ...f, [path]: range ? { ...range, nonce: Date.now() } : null }));
     setTab(path);
     setMenu(false);
   }, []);
 
+  const openCitation = useCallback(
+    (c: Citation) => openFile(c.path, hasLines(c) ? { start: c.start_line, end: c.end_line } : undefined),
+    [openFile],
+  );
+
   function closeTab(path: string) {
     setTabs((t) => t.filter((x) => x !== path));
+    setFocus(({ [path]: _closed, ...rest }) => rest);
     if (tab === path) setTab("chat");
+  }
+
+  function setFeedback(messageId: string, value: "up" | "down" | undefined) {
+    if (!active) return;
+    setChats((c) => ({ ...c, [active]: (c[active] ?? []).map((m) => (m.id === messageId ? { ...m, feedback: value } : m)) }));
+  }
+
+  // Re-index in place: the old vectors keep answering until the new copy is swapped in (atomic on the backend).
+  async function reindex(name: string) {
+    const r = repos.find((x) => x.name === name);
+    if (!r || reindexing[name]?.status === "running") return;
+    const set = (s: ReindexState) => setReindexing((m) => ({ ...m, [name]: s }));
+    set({ status: "running", stage: "Starting…", pct: 0 });
+    try {
+      const job = await indexRepo({ repo_url: r.url, collection_name: name, force: true }, (j) =>
+        set({ status: "running", stage: j.stage, pct: j.chunks ? Math.round((j.embedded / j.chunks) * 100) : 0 }),
+      );
+      setRepos((list) => list.map((x) => (x.name === name ? { ...x, files: job.files || x.files, chunks: job.chunks || x.chunks, indexedAt: Date.now() } : x)));
+      set({ status: "done", stage: "Done", pct: 100 });
+      toast.success(`${r.repo} re-indexed — line-level sources are ready ✨`);
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 401) return logout("Your login expired — sign in again.");
+      set({ status: "failed", stage: "Failed", pct: 0 });
+      toast.error(e instanceof Error ? e.message : "Re-indexing failed.");
+    }
   }
 
   async function send(question: string) {
@@ -179,7 +229,7 @@ export default function App() {
       await streamQuestion(
         { question, collection_name: name, history },
         {
-          onSources: (sources) => patch((m) => ({ ...m, sources })),
+          onSources: (sources, citations) => patch((m) => ({ ...m, sources, citations })),
           onToken: (text) => patch((m) => ({ ...m, content: m.content + text })),
         },
         controller.signal,
@@ -209,24 +259,28 @@ export default function App() {
     abortRef.current?.abort();
   }
 
-  const sidebar = (onClose?: () => void) => (
+  const sidebar = (mobile: boolean) => (
     <Sidebar
       repos={repos}
       active={showNew ? null : active}
       files={files}
       openFile={tab === "chat" ? null : tab}
       dark={dark}
+      collapsed={!mobile && collapsed}
+      reindexing={reindexing}
       onSelect={selectRepo}
       onNew={() => {
         setShowNew(true);
         setMenu(false);
       }}
       onRemove={removeRepo}
-      onOpenFile={openFile}
+      onReindex={reindex}
+      onOpenFile={(path) => openFile(path)}
       onToggleTheme={toggleTheme}
+      onToggleCollapse={mobile ? undefined : () => setCollapsed((c) => !c)}
       user={user}
       onLogout={() => logout()}
-      onClose={onClose}
+      onClose={mobile ? () => setMenu(false) : undefined}
     />
   );
 
@@ -235,16 +289,16 @@ export default function App() {
   return (
     <div className="flex h-full flex-col">
       <div className="flex min-h-0 flex-1">
-        <div className="hidden md:block">{sidebar()}</div>
+        <div className="hidden md:block">{sidebar(false)}</div>
 
         {menu && (
           <div className="fixed inset-0 z-40 md:hidden">
-            <div className="absolute inset-0 bg-black/40 animate-fadeIn" onClick={() => setMenu(false)} />
-            <div className="relative h-full w-72 animate-fadeIn">{sidebar(() => setMenu(false))}</div>
+            <div className="absolute inset-0 bg-black/50 backdrop-blur-sm animate-fadeIn" onClick={() => setMenu(false)} />
+            <div className="relative h-full w-72 animate-slideInLeft shadow-2xl shadow-black/40">{sidebar(true)}</div>
           </div>
         )}
 
-        <main className="flex min-w-0 flex-1 flex-col bg-bg">
+        <main className="app-glow flex min-w-0 flex-1 flex-col">
           {welcome ? (
             <div className="flex min-h-0 flex-1 flex-col">
               <div className="flex items-center gap-2 border-b border-line bg-side px-3 py-2.5 md:hidden">
@@ -323,9 +377,17 @@ export default function App() {
               <TabBar tabs={tabs} active={tab} onSelect={setTab} onClose={closeTab} onMenu={() => setMenu(true)} />
               <div className="min-h-0 flex-1">
                 {tab === "chat" ? (
-                  <ChatView repo={repo} messages={messages} loading={loading} onSend={send} onStop={stop} onOpenFile={openFile} />
+                  <ChatView
+                    repo={repo}
+                    messages={messages}
+                    loading={loading}
+                    onSend={send}
+                    onStop={stop}
+                    onOpenCitation={openCitation}
+                    onFeedback={setFeedback}
+                  />
                 ) : (
-                  <FileView key={tab} repo={repo} path={tab} />
+                  <FileView key={tab} repo={repo} path={tab} focus={focus[tab]} />
                 )}
               </div>
             </>
@@ -333,6 +395,14 @@ export default function App() {
         </main>
       </div>
       <StatusBar server={server} repo={welcome ? null : repo} />
+      <Toaster
+        position="top-right"
+        toastOptions={{
+          className: "!rounded-xl !border !border-line !bg-panel !text-text !text-sm !shadow-2xl !shadow-black/30",
+          success: { iconTheme: { primary: "rgb(var(--ok))", secondary: "white" } },
+          error: { iconTheme: { primary: "rgb(var(--bad))", secondary: "white" } },
+        }}
+      />
     </div>
   );
 }

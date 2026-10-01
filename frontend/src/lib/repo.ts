@@ -14,6 +14,6 @@ export function collectionFromRepo(owner: string, repo: string): string {
 export const rawFileUrl = (r: Repo, path: string) =>
   `https://raw.githubusercontent.com/${r.owner}/${r.repo}/HEAD/${path.split("/").map(encodeURIComponent).join("/")}`;
 
-export const blobUrl = (r: Repo, path: string) => `https://github.com/${r.owner}/${r.repo}/blob/HEAD/${path}`;
+export const blobUrl = (r: Repo, path: string, anchor = "") => `https://github.com/${r.owner}/${r.repo}/blob/HEAD/${path}${anchor}`;
 
 export const uid = () => Math.random().toString(36).slice(2) + Date.now().toString(36);

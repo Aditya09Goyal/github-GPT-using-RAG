@@ -12,7 +12,7 @@ from app.core.config import settings
 from app.core.logging import get_logger
 from app.schemas.chat import ChatTurn
 from app.services.overview import OVERVIEW_SOURCE
-from app.services.retriever import get_overview, retrieve_relevant_chunks
+from app.services.retriever import SearchMode, get_overview, retrieve_relevant_chunks
 
 logger = get_logger(__name__)
 
@@ -28,6 +28,7 @@ SYSTEM_PROMPT = """You are a helpful assistant answering questions about a GitHu
 Use ONLY the context below to answer. The first block is a REPOSITORY OVERVIEW (GitHub description, contributors, languages, file list, README start); the rest are relevant pieces of the code.
 The earlier conversation is only there to help you understand what the user is referring to — facts must come from the context.
 You may explain what the code does based on what you can see in it. If the question has several parts, answer every part you can and say briefly which part isn't in the context. Never make things up.
+Each code block is labelled with its file and line range, e.g. [Source: app/auth.py · L12-40]. When you point to specific code, name the file and, where it helps, the lines (e.g. app/auth.py L12-40).
 Context:
 {context}"""
 
@@ -77,15 +78,27 @@ def get_condense_llm() -> ChatGroq:
     return _condense_llm
 
 
+def _line_range(meta: dict) -> tuple[int, int] | None:
+    """(start_line, end_line) from chunk metadata, or None (overview / repos indexed before line numbers)."""
+    start, end = meta.get("start_line"), meta.get("end_line")
+    if isinstance(start, int) and isinstance(end, int) and 1 <= start <= end:
+        return start, end
+    return None
+
+
+def source_label(meta: dict) -> str:
+    """'app/auth.py · L12-40', or just the path when the chunk has no line numbers."""
+    path = meta.get("source", "unknown")
+    lines = _line_range(meta)
+    return f"{path} · L{lines[0]}-{lines[1]}" if lines else path
+
+
 def format_context(docs: list[Document]) -> str:
     """
     Turns retrieved Documents into a single text block for the prompt,
-    labeling each chunk with its source file so the LLM can reference it.
+    labeling each chunk with its source file (and line range) so the LLM can reference it.
     """
-    return "\n\n".join(
-        f"[Source: {doc.metadata.get('source', 'unknown')}]\n{doc.page_content}"
-        for doc in docs
-    )
+    return "\n\n".join(f"[Source: {source_label(doc.metadata)}]\n{doc.page_content}" for doc in docs)
 
 
 def _trim_history(history: list[ChatTurn] | None) -> list[ChatTurn]:
@@ -168,10 +181,17 @@ def condense_question(question: str, history: list[ChatTurn]) -> str:
     return standalone or question
 
 
-def _prepare(question: str, collection_name: str, history: list[ChatTurn] | None):
+def prepare_context(
+    question: str,
+    collection_name: str,
+    history: list[ChatTurn] | None,
+    mode: SearchMode | None = None,
+) -> tuple[list[ChatTurn], list[Document]]:
     """
     Shared first half of the RAG flow: trim the history, work out what to search for,
-    and retrieve the relevant chunks.
+    and retrieve the relevant chunks. Returns (trimmed history, docs) — docs[0] is the
+    repo overview when the repo has one, the rest are retrieved chunks in rank order.
+    (Also used by scripts/eval.py, so the evaluation measures exactly what users get.)
     """
     history = _trim_history(history)
     t0 = time.perf_counter()
@@ -179,7 +199,7 @@ def _prepare(question: str, collection_name: str, history: list[ChatTurn] | None
     t1 = time.perf_counter()
     docs = [
         d
-        for d in retrieve_relevant_chunks(search_query, collection_name)
+        for d in retrieve_relevant_chunks(search_query, collection_name, mode=mode)
         if d.metadata.get("source") != OVERVIEW_SOURCE
     ]
     t2 = time.perf_counter()
@@ -210,23 +230,43 @@ def _sources(docs: list[Document]) -> list[str]:
     return sorted({doc.metadata.get("source", "unknown") for doc in docs} - {OVERVIEW_SOURCE})
 
 
-def answer_question(
-    question: str, collection_name: str, history: list[ChatTurn] | None = None
-) -> dict:
+def build_citations(docs: list[Document]) -> list[dict]:
     """
-    Full RAG flow: retrieve relevant chunks, build a prompt, call the LLM,
-    return the answer along with which sources were used.
+    One citation per file region the answer was grounded in:
+      {"path": "app/auth.py", "start_line": 12, "end_line": 40}
+    Overlapping or touching chunks of the same file (chunks overlap by design) are merged into one range.
+    Files are listed in retrieval order (most relevant first), ranges within a file top to bottom.
+    Chunks without line numbers (repos indexed before they existed) give one path-only citation
+    with start_line/end_line = None — unless the same file also has a real range.
     """
-    history, docs = _prepare(question, collection_name, history)
+    by_path: dict[str, list[tuple[int, int]]] = {}
+    for doc in docs:
+        path = doc.metadata.get("source", "unknown")
+        if path == OVERVIEW_SOURCE:
+            continue
+        ranges = by_path.setdefault(path, [])
+        lines = _line_range(doc.metadata)
+        if lines:
+            ranges.append(lines)
 
-    if not docs:
-        logger.warning("No relevant chunks found — answering without context.")
-        return {"answer": NO_CONTEXT_ANSWER, "sources": []}
+    citations: list[dict] = []
+    for path, ranges in by_path.items():
+        if not ranges:
+            citations.append({"path": path, "start_line": None, "end_line": None})
+            continue
+        merged: list[list[int]] = []
+        for start, end in sorted(ranges):
+            if merged and start <= merged[-1][1] + 1:
+                merged[-1][1] = max(merged[-1][1], end)
+            else:
+                merged.append([start, end])
+        citations.extend({"path": path, "start_line": a, "end_line": b} for a, b in merged)
+    return citations
 
-    logger.info(
-        f"Calling LLM for question: '{question}' ({len(history)} history messages)"
-    )
-    answer = _answer_chain().invoke(
+
+def generate_answer(question: str, docs: list[Document], history: list[ChatTurn]) -> str:
+    """Second half of the RAG flow: one LLM call over the prepared context."""
+    return _answer_chain().invoke(
         {
             "context": format_context(docs),
             "history": _to_messages(history),
@@ -234,7 +274,26 @@ def answer_question(
         }
     )
 
-    return {"answer": answer, "sources": _sources(docs)}
+
+def answer_question(
+    question: str, collection_name: str, history: list[ChatTurn] | None = None
+) -> dict:
+    """
+    Full RAG flow: retrieve relevant chunks, build a prompt, call the LLM,
+    return the answer along with which sources were used.
+    """
+    history, docs = prepare_context(question, collection_name, history)
+
+    if not docs:
+        logger.warning("No relevant chunks found — answering without context.")
+        return {"answer": NO_CONTEXT_ANSWER, "sources": [], "citations": []}
+
+    logger.info(
+        f"Calling LLM for question: '{question}' ({len(history)} history messages)"
+    )
+    answer = generate_answer(question, docs, history)
+
+    return {"answer": answer, "sources": _sources(docs), "citations": build_citations(docs)}
 
 
 def stream_answer(
@@ -242,20 +301,20 @@ def stream_answer(
 ) -> Iterator[dict]:
     """
     Same flow as answer_question, but yields events as they become available:
-      {"type": "sources", "sources": [...]}  — once, before any text
+      {"type": "sources", "sources": [...], "citations": [...]}  — once, before any text
       {"type": "token", "content": "..."}    — many times, pieces of the answer
     The caller is responsible for sending a final "done" event.
     """
     start = time.perf_counter()
-    history, docs = _prepare(question, collection_name, history)
+    history, docs = prepare_context(question, collection_name, history)
 
     if not docs:
         logger.warning("No relevant chunks found — answering without context.")
-        yield {"type": "sources", "sources": []}
+        yield {"type": "sources", "sources": [], "citations": []}
         yield {"type": "token", "content": NO_CONTEXT_ANSWER}
         return
 
-    yield {"type": "sources", "sources": _sources(docs)}
+    yield {"type": "sources", "sources": _sources(docs), "citations": build_citations(docs)}
 
     logger.info(
         f"Streaming LLM answer for question: '{question}' ({len(history)} history messages)"

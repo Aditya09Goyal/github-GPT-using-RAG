@@ -24,9 +24,21 @@ class ChatRequest(BaseModel):
     )
 
 
+class Citation(BaseModel):
+    """
+    One file region an answer was grounded in, e.g. app/auth.py lines 12-40 (1-based, inclusive).
+    Lines are None for repos indexed before line numbers were recorded (re-index to get them).
+    """
+    path: str
+    start_line: int | None = None
+    end_line: int | None = None
+
+
 class ChatResponse(BaseModel):
     """
-    What we send back: the answer plus which files it was grounded in.
+    What we send back: the answer plus which files (sources) and exact
+    line ranges (citations) it was grounded in.
     """
     answer: str
     sources: list[str]
+    citations: list[Citation] = Field(default_factory=list)
