@@ -19,7 +19,7 @@ def _sqlalchemy_url(url: str) -> str:
     """
     for prefix in ("postgresql+psycopg://", "postgresql://", "postgres://"):
         if url.startswith(prefix):
-            return "postgresql+psycopg://" + url[len(prefix):]
+            return "postgresql+psycopg://" + url[len(prefix) :]
     return url
 
 
@@ -48,34 +48,65 @@ def get_vectorstore(collection_name: str) -> PGVector:
     )
 
 
-def add_chunks_to_store(chunks: list[Chunk], collection_name: str) -> None:
+def add_chunks_to_store(
+    chunks: list[Chunk], collection_name: str, on_progress=None
+) -> None:
     """
-    Embeds and stores a list of chunks into the given collection.
-    Each chunk becomes a Document with metadata (source file + chunk index)
-    so we can trace answers back to their origin later.
+    Embeds and stores chunks in small batches.
+    Small batches keep peak RAM low on the free tier, and on_progress(done_count)
+    lets the indexing job report live progress to the frontend.
     """
     if not chunks:
         logger.warning("No chunks to add — skipping.")
         return
 
     store = get_vectorstore(collection_name)
+    batch = settings.embed_batch_size
 
-    documents = [
-        Document(
-            page_content=chunk.text,
-            metadata={
-                "source": chunk.source_path,
-                "chunk_index": chunk.chunk_index,
-            },
+    logger.info(f"Adding {len(chunks)} chunks to collection '{collection_name}'")
+    for i in range(0, len(chunks), batch):
+        part = chunks[i : i + batch]
+        store.add_documents(
+            [
+                Document(
+                    page_content=c.text,
+                    metadata={"source": c.source_path, "chunk_index": c.chunk_index},
+                )
+                for c in part
+            ]
         )
-        for chunk in chunks
-    ]
-
-    logger.info(f"Adding {len(documents)} documents to collection '{collection_name}'")
-    batch = 200
-    for i in range(0, len(documents), batch):
-        store.add_documents(documents[i:i + batch])
+        if on_progress:
+            on_progress(i + len(part))
     logger.info("Done adding documents.")
+
+
+def delete_collection(collection_name: str) -> None:
+    """
+    Removes a collection and all its vectors (embeddings are deleted by ON DELETE CASCADE).
+    """
+    try:
+        with _engine.begin() as conn:
+            conn.execute(
+                text("DELETE FROM langchain_pg_collection WHERE name = :name"),
+                {"name": collection_name},
+            )
+    except Exception:
+        logger.debug(f"Nothing to delete for '{collection_name}'")
+
+
+def rename_collection(old: str, new: str) -> None:
+    """
+    Atomically swaps a finished temp collection into its real name
+    (and replaces an older copy if one exists — used for re-indexing).
+    """
+    with _engine.begin() as conn:
+        conn.execute(
+            text("DELETE FROM langchain_pg_collection WHERE name = :new"), {"new": new}
+        )
+        conn.execute(
+            text("UPDATE langchain_pg_collection SET name = :new WHERE name = :old"),
+            {"new": new, "old": old},
+        )
 
 
 def collection_exists(collection_name: str) -> bool:
@@ -84,16 +115,14 @@ def collection_exists(collection_name: str) -> bool:
     Uses a plain SQL query so that checking never creates an empty collection
     as a side effect (constructing PGVector would).
     """
-    query = text(
-        """
+    query = text("""
         SELECT EXISTS (
             SELECT 1
             FROM langchain_pg_embedding e
             JOIN langchain_pg_collection c ON c.uuid = e.collection_id
             WHERE c.name = :name
         )
-        """
-    )
+        """)
     try:
         with _engine.connect() as conn:
             return bool(conn.execute(query, {"name": collection_name}).scalar())

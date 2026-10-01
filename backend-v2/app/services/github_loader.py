@@ -30,6 +30,19 @@ ALLOWED_EXTENSIONS = {
     ".toml",
     ".html",
     ".css",
+    ".c",
+    ".h",
+    ".cpp",
+    ".hpp",
+    ".cs",
+    ".kt",
+    ".php",
+    ".rb",
+    ".swift",
+    ".sql",
+    ".sh",
+    ".vue",
+    ".svelte",
 }
 
 ALLOWED_NO_EXTENSION_NAMES = {"README", "LICENSE", "Dockerfile", "Makefile"}
@@ -46,6 +59,12 @@ IGNORED_DIRS = {
     ".venv",
     ".cache",
     ".vite",
+    "vendor",
+    "target",
+    "coverage",
+    ".idea",
+    ".vscode",
+    "site-packages",
 }
 
 # Huge auto-generated files: thousands of useless chunks, slow to embed on a free CPU
@@ -119,7 +138,20 @@ def collect_files(repo_path: Path) -> list[Path]:
         if path.name in IGNORED_FILES or path.stat().st_size > MAX_FILE_BYTES:
             continue
 
+        # minified bundles are one giant line of noise
+        if path.name.endswith((".min.js", ".min.css", ".map")):
+            continue
+
         collected.append(path)
 
     logger.info(f"Collected {len(collected)} files from {repo_path}")
     return collected
+
+
+def remove_clone(repo_path: Path) -> None:
+    """
+    Deletes the local clone once it's embedded — the frontend reads files straight
+    from GitHub, so keeping clones only fills up the server's small disk.
+    """
+    if repo_path.exists():
+        shutil.rmtree(repo_path, onexc=_force_remove)

@@ -3,13 +3,19 @@
 export interface IndexRepoRequest {
   repo_url: string;
   collection_name: string;
+  force?: boolean; // re-index an existing repo
 }
 
-export interface IndexRepoResponse {
+export interface IndexJob {
   collection_name: string;
-  files_indexed: number;
-  chunks_created: number;
-  message: string;
+  repo_url: string;
+  status: "queued" | "running" | "done" | "failed";
+  stage: string;
+  files: number;
+  chunks: number;
+  embedded: number;
+  error: string | null;
+  started_at: number;
 }
 
 export interface ChatTurn {

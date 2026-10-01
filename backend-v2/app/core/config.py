@@ -14,28 +14,43 @@ class Settings(BaseSettings):
     google_api_key: str | None = None
 
     # --- GitHub access ---
-    github_token: str | None = None  # optional: only needed for private repos / higher rate limits
+    github_token: str | None = (
+        None  # optional: only needed for private repos / higher rate limits
+    )
 
     # --- Embedding model ---
     embedding_model_name: str = "sentence-transformers/all-MiniLM-L6-v2"
-    embedding_cache_dir: str = str(Path(__file__).resolve().parent.parent.parent / ".cache" / "fastembed")
+    embedding_cache_dir: str = str(
+        Path(__file__).resolve().parent.parent.parent / ".cache" / "fastembed"
+    )
 
     # --- Vector store ---
     database_url: str  # Neon connection string (postgresql://...), set in .env
 
     # --- Repo storage ---
-    repo_clone_dir: str = str(Path(__file__).resolve().parent.parent.parent / "data" / "repos")
+    repo_clone_dir: str = str(
+        Path(__file__).resolve().parent.parent.parent / "data" / "repos"
+    )
 
     # --- Chunking ---
     chunk_size: int = 1000
     chunk_overlap: int = 200
+    # --- Limits for big repos (free tier = 512 MB RAM, slow CPU) ---
+    max_files: int = 1500
+    max_chunks: int = 8000
+
+    embed_batch_size: int = 64
 
     # --- Retrieval ---
-    retriever_top_k: int = 5
+    retriever_top_k: int = 8
 
     # --- Conversation memory ---
-    history_max_messages: int = 6  # how many earlier messages (user + assistant) the LLM sees
-    history_max_chars: int = 1500  # long earlier answers are cut to this length to save tokens
+    history_max_messages: int = (
+        6  # how many earlier messages (user + assistant) the LLM sees
+    )
+    history_max_chars: int = (
+        1500  # long earlier answers are cut to this length to save tokens
+    )
 
     # --- CORS ---
     cors_origins: str = "http://localhost:5173,http://localhost:3000"

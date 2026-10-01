@@ -1,5 +1,4 @@
-import type { IndexRepoRequest, IndexRepoResponse, ChatRequest, ChatResponse } from "../types/api";
-
+import type { IndexRepoRequest, IndexJob, ChatRequest, ChatResponse } from "../types/api";
 const BASE_URL = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, "") ?? "";
 
 export class ApiError extends Error {
@@ -28,8 +27,35 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-export const indexRepo = (body: IndexRepoRequest) =>
-  request<IndexRepoResponse>("/repos", { method: "POST", body: JSON.stringify(body) });
+export const startIndex = (body: IndexRepoRequest) =>
+  request<IndexJob>("/repos", { method: "POST", body: JSON.stringify(body) });
+
+export const indexStatus = (name: string) => request<IndexJob>(`/repos/${encodeURIComponent(name)}/status`);
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Starts indexing and polls until it finishes. Polling every 2s also keeps the
+ * free Render server awake while a big repo is being embedded.
+ */
+export async function indexRepo(body: IndexRepoRequest, onProgress: (job: IndexJob) => void): Promise<IndexJob> {
+  let job = await startIndex(body);
+  let misses = 0;
+  for (;;) {
+    onProgress(job);
+    if (job.status === "done") return job;
+    if (job.status === "failed") throw new ApiError(job.error ?? "Indexing failed.", 500);
+    await sleep(2000);
+    try {
+      job = await indexStatus(body.collection_name);
+      misses = 0;
+    } catch (e) {
+      // a 404 means the server lost the job (restarted); network blips are retried a few times
+      if (e instanceof ApiError && e.status === 404) throw e;
+      if (++misses > 15) throw e;
+    }
+  }
+}
 
 export const askQuestion = (body: ChatRequest) =>
   request<ChatResponse>("/chat", { method: "POST", body: JSON.stringify(body) });

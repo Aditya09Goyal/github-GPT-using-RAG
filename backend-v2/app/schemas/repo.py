@@ -23,6 +23,10 @@ class IndexRepoRequest(BaseModel):
         pattern=COLLECTION_NAME_PATTERN,
         description="Unique name to store this repo's vectors under (3-63 chars: letters, digits, - or _)",
     )
+    force: bool = Field(
+        False,
+        description="Re-index even if this collection already exists (the old copy is replaced when the new one is ready)",
+    )
 
 
 class IndexRepoResponse(BaseModel):
@@ -34,3 +38,19 @@ class IndexRepoResponse(BaseModel):
     files_indexed: int
     chunks_created: int
     message: str
+
+
+class IndexJobStatus(BaseModel):
+    """
+    Progress of a background indexing job (returned by POST /repos and GET /repos/{name}/status).
+    """
+
+    collection_name: str
+    repo_url: str
+    status: str  # queued | running | done | failed
+    stage: str
+    files: int
+    chunks: int
+    embedded: int
+    error: str | None = None
+    started_at: float
