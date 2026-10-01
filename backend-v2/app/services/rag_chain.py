@@ -1,3 +1,4 @@
+import re
 import time
 from collections.abc import Iterator
 
@@ -63,7 +64,10 @@ def get_condense_llm() -> ChatGroq:
     """Small, fast model used only to rewrite follow-up questions."""
     global _condense_llm
     if _condense_llm is None:
-        extra = {"reasoning_effort": "low"} if "gpt-oss" in settings.condense_model else {}
+        effort = settings.condense_reasoning_effort
+        if effort is None:  # auto
+            effort = "low" if "gpt-oss" in settings.condense_model else "none" if "qwen" in settings.condense_model else None
+        extra = {"reasoning_effort": effort} if effort else {}
         _condense_llm = ChatGroq(
             model=settings.condense_model,
             groq_api_key=settings.groq_api_key,
@@ -114,6 +118,28 @@ def _to_messages(history: list[ChatTurn]) -> list[BaseMessage]:
     ]
 
 
+# Words that point back at the conversation ("where is IT called?", "explain THIS more").
+_REFERS_BACK = re.compile(
+    r"\b(it|its|it's|this|that|these|those|they|them|their|there|he|she|him|her|above|previous|"
+    r"same|also|again|more|else|other|another|former|latter|ones?)\b",
+    re.IGNORECASE,
+)
+
+
+_THIS_REPO = re.compile(r"\b(this|that|the)\s+(project|repo|repository|codebase|code\s?base|app|application)\b", re.IGNORECASE)
+
+
+def needs_rewrite(question: str) -> bool:
+    """
+    Only follow-ups need the LLM rewrite. A self-contained question
+    ("Where is the main entry point?") is searched as-is, which saves one LLM call (~0.5-2 s).
+    Very short messages ("and f4?", "why?") are treated as follow-ups.
+    """
+    # "this project / this repo" just means the indexed repo — not a reference to earlier messages
+    q = _THIS_REPO.sub(" ", question)
+    return len(question.split()) <= 3 or bool(_REFERS_BACK.search(q))
+
+
 def condense_question(question: str, history: list[ChatTurn]) -> str:
     """
     Rewrites a follow-up question into a standalone one using the conversation.
@@ -149,7 +175,7 @@ def _prepare(question: str, collection_name: str, history: list[ChatTurn] | None
     """
     history = _trim_history(history)
     t0 = time.perf_counter()
-    search_query = condense_question(question, history) if history else question
+    search_query = condense_question(question, history) if history and needs_rewrite(question) else question
     t1 = time.perf_counter()
     docs = [
         d

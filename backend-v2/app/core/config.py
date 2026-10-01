@@ -42,6 +42,7 @@ class Settings(BaseSettings):
     llm_model: str = "openai/gpt-oss-120b"  # writes the answers
     llm_reasoning_effort: str = "low"  # gpt-oss thinks before answering; "low" = first token much sooner
     condense_model: str = "openai/gpt-oss-20b"  # only rewrites follow-up questions (small + fast)
+    condense_reasoning_effort: str | None = None  # None = auto: "low" for gpt-oss, "none" for qwen (no thinking)
 
     # --- Retrieval ---
     retriever_top_k: int = 8
