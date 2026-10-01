@@ -34,6 +34,12 @@ export interface ChatResponse {
   sources: string[];
 }
 
+export interface User {
+  login: string;
+  name: string;
+  avatar_url: string;
+}
+
 // ---------- frontend-only types ----------
 
 export interface ChatMessage {

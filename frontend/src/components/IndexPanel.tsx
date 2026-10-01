@@ -1,9 +1,8 @@
 import { useEffect, useState } from "react";
-import { Github, Loader2, Star, User } from "lucide-react";
+import { Github, Loader2, Star } from "lucide-react";
 import { indexRepo, ApiError } from "../api/client";
 import { collectionFromRepo, parseGithubUrl } from "../lib/repo";
-import { load, save } from "../lib/storage";
-import type { IndexJob, Repo } from "../types/api";
+import type { IndexJob, Repo, User } from "../types/api";
 
 interface GhRepo {
   name: string;
@@ -14,13 +13,19 @@ interface GhRepo {
   size: number;
 }
 
-export default function IndexPanel({ onIndexed, autoFocus }: { onIndexed: (r: Repo) => void; autoFocus?: boolean }) {
+interface Props {
+  user: User;
+  onIndexed: (r: Repo) => void;
+  onAuthExpired: () => void;
+  autoFocus?: boolean;
+}
+
+export default function IndexPanel({ user, onIndexed, onAuthExpired, autoFocus }: Props) {
   const [url, setUrl] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [secs, setSecs] = useState(0);
   const [job, setJob] = useState<IndexJob | null>(null);
-  const [user, setUser] = useState(() => load("ghgpt:user", ""));
   const [userRepos, setUserRepos] = useState<GhRepo[]>([]);
   const [userBusy, setUserBusy] = useState(false);
   const [userError, setUserError] = useState("");
@@ -35,33 +40,29 @@ export default function IndexPanel({ onIndexed, autoFocus }: { onIndexed: (r: Re
     return () => clearInterval(t);
   }, [busy]);
 
-  // public GitHub API, no login needed (60 requests / hour per visitor)
-  async function loadUserRepos(name = user) {
-    const u = name.trim().replace(/^@/, "");
-    if (!u) return;
+  // the signed-in user's public repos (public GitHub API, 60 requests / hour per visitor)
+  useEffect(() => {
+    let alive = true;
     setUserBusy(true);
     setUserError("");
-    try {
-      const res = await fetch(`https://api.github.com/users/${encodeURIComponent(u)}/repos?sort=updated&per_page=30`);
-      if (res.status === 404) throw new Error(`No GitHub user "${u}"`);
-      if (res.status === 403) throw new Error("GitHub rate limit hit — try again in a while");
-      if (!res.ok) throw new Error(`GitHub returned ${res.status}`);
-      const list = ((await res.json()) as GhRepo[]).filter((r) => r.size > 0).slice(0, 12);
-      setUserRepos(list);
-      if (!list.length) setUserError(`${u} has no public repos with code`);
-      save("ghgpt:user", u);
-    } catch (e) {
-      setUserRepos([]);
-      setUserError(e instanceof Error ? e.message : "Couldn't load repos");
-    } finally {
-      setUserBusy(false);
-    }
-  }
-
-  useEffect(() => {
-    if (user) loadUserRepos(user);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    fetch(`https://api.github.com/users/${encodeURIComponent(user.login)}/repos?sort=updated&per_page=30`)
+      .then((res) => {
+        if (res.status === 403) throw new Error("GitHub rate limit hit — paste a repo link instead");
+        if (!res.ok) throw new Error(`GitHub returned ${res.status}`);
+        return res.json() as Promise<GhRepo[]>;
+      })
+      .then((list) => {
+        if (!alive) return;
+        const withCode = list.filter((r) => r.size > 0).slice(0, 12);
+        setUserRepos(withCode);
+        if (!withCode.length) setUserError("You have no public repos with code yet — paste any public repo link above.");
+      })
+      .catch((e: Error) => alive && setUserError(e.message))
+      .finally(() => alive && setUserBusy(false));
+    return () => {
+      alive = false;
+    };
+  }, [user.login]);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -75,7 +76,9 @@ export default function IndexPanel({ onIndexed, autoFocus }: { onIndexed: (r: Re
       onIndexed({ ...base, files: r.files || undefined, chunks: r.chunks || undefined });
       setUrl("");
     } catch (err) {
-      if (err instanceof ApiError && err.status === 409) {
+      if (err instanceof ApiError && err.status === 401) {
+        onAuthExpired(); // token missing / expired → back to the sign-in screen
+      } else if (err instanceof ApiError && err.status === 409) {
         onIndexed(base); // already indexed earlier → just open it
         setUrl("");
       } else {
@@ -137,35 +140,9 @@ export default function IndexPanel({ onIndexed, autoFocus }: { onIndexed: (r: Re
 
       {!busy && (
         <div className="mt-3 px-1">
-          <div className="flex items-center gap-2">
-            <div className="flex min-w-0 flex-1 items-center gap-1.5 rounded-lg border border-line bg-panel px-2 py-1 focus-within:border-accent">
-              <User size={13} className="shrink-0 text-muted" />
-              <input
-                value={user}
-                onChange={(e) => {
-                  setUser(e.target.value);
-                  setUserError("");
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    loadUserRepos();
-                  }
-                }}
-                placeholder="Your GitHub username"
-                aria-label="GitHub username"
-                className="min-w-0 flex-1 bg-transparent py-0.5 font-mono text-xs outline-none placeholder:text-muted/70"
-              />
-            </div>
-            <button
-              type="button"
-              onClick={() => loadUserRepos()}
-              disabled={!user.trim() || userBusy}
-              className="flex shrink-0 items-center gap-1 rounded-lg border border-line bg-panel px-2.5 py-1 text-xs text-muted hover:border-accent hover:text-text disabled:opacity-40"
-            >
-              {userBusy && <Loader2 size={12} className="animate-spin" />}
-              Show my repos
-            </button>
+          <div className="flex items-center gap-1.5 text-xs text-muted">
+            {userBusy && <Loader2 size={12} className="animate-spin" />}
+            Your repositories
           </div>
 
           {userError && <p className="mt-1.5 text-xs text-bad">{userError}</p>}

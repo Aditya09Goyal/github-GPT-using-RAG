@@ -22,14 +22,15 @@ class Job:
     embedded: int = 0
     error: str | None = None
     started_at: float = field(default_factory=time.time)
+    requested_by: list[str] = field(default_factory=list)  # logins that get this repo added when it finishes
 
     def to_dict(self) -> dict:
         return asdict(self)
 
 
-def create_job(collection_name: str, repo_url: str) -> Job:
+def create_job(collection_name: str, repo_url: str, login: str) -> Job:
     with _jobs_lock:
-        job = Job(collection_name=collection_name, repo_url=repo_url)
+        job = Job(collection_name=collection_name, repo_url=repo_url, requested_by=[login])
         _jobs[collection_name] = job
         return job
 

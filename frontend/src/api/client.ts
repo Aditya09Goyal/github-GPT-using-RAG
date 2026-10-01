@@ -1,5 +1,15 @@
-import type { IndexRepoRequest, IndexJob, ChatRequest, ChatResponse } from "../types/api";
+import type { IndexRepoRequest, IndexJob, ChatRequest, ChatResponse, User } from "../types/api";
+import { getToken } from "../lib/auth";
+
 const BASE_URL = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, "") ?? "";
+
+// "Sign in with GitHub" is a normal link to this backend route
+export const loginUrl = `${BASE_URL}/auth/github/login`;
+
+const authHeader = (): Record<string, string> => {
+  const t = getToken();
+  return t ? { Authorization: `Bearer ${t}` } : {};
+};
 
 export class ApiError extends Error {
   status: number;
@@ -14,7 +24,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   try {
     res = await fetch(`${BASE_URL}${path}`, {
       ...init,
-      headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
+      headers: { "Content-Type": "application/json", ...authHeader(), ...(init?.headers ?? {}) },
     });
   } catch {
     throw new ApiError("Can't reach the server. It may be waking up — try again in a few seconds.", 0);
@@ -62,6 +72,25 @@ export const askQuestion = (body: ChatRequest) =>
 
 export const health = () => request<{ status: string }>("/health");
 
+export const me = () => request<User>("/auth/me");
+
+export interface ServerRepo {
+  name: string;
+  url: string;
+  files: number;
+  chunks: number;
+  indexed_at: string | null;
+}
+
+// the signed-in user's own repo list
+export const listRepos = () => request<ServerRepo[]>("/repos");
+
+// removes the repo from MY list only
+export async function removeRepo(name: string): Promise<void> {
+  const res = await fetch(`${BASE_URL}/repos/${encodeURIComponent(name)}`, { method: "DELETE", headers: authHeader() });
+  if (!res.ok && res.status !== 404) throw new ApiError(`Couldn't remove (${res.status})`, res.status);
+}
+
 export interface StreamHandlers {
   onSources: (sources: string[]) => void;
   onToken: (text: string) => void;
@@ -77,7 +106,7 @@ export async function streamQuestion(body: ChatRequest, handlers: StreamHandlers
   try {
     res = await fetch(`${BASE_URL}/chat/stream`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...authHeader() },
       body: JSON.stringify(body),
       signal,
     });

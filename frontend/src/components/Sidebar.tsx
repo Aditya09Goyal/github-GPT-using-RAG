@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
-import { ChevronDown, ChevronRight, FileCode2, Folder, Github, Moon, Plus, Sun, Trash2, X } from "lucide-react";
+import { ChevronDown, ChevronRight, FileCode2, Folder, Github, LogOut, Moon, Plus, Sun, Trash2, X } from "lucide-react";
 import Logo from "./Logo";
-import type { Repo } from "../types/api";
+import type { Repo, User } from "../types/api";
 
 interface Props {
   repos: Repo[];
@@ -14,6 +14,8 @@ interface Props {
   onRemove: (name: string) => void;
   onOpenFile: (path: string) => void;
   onToggleTheme: () => void;
+  user: User | null;
+  onLogout: () => void;
   onClose?: () => void;
 }
 
@@ -123,6 +125,19 @@ export default function Sidebar(p: Props) {
           );
         })}
       </div>
+
+      {p.user && (
+        <div className="flex items-center gap-2 border-t border-line px-4 py-2.5">
+          {p.user.avatar_url && <img src={p.user.avatar_url} alt="" className="h-7 w-7 rounded-full border border-line" />}
+          <div className="min-w-0 flex-1 leading-tight">
+            <div className="truncate text-sm font-medium">{p.user.name}</div>
+            <div className="truncate font-mono text-[11px] text-muted">@{p.user.login}</div>
+          </div>
+          <button onClick={p.onLogout} className="rounded-md p-1.5 text-muted hover:bg-line/50 hover:text-bad" aria-label="Sign out" title="Sign out">
+            <LogOut size={14} />
+          </button>
+        </div>
+      )}
 
       <div className="flex items-center justify-between border-t border-line px-4 py-3 text-xs text-muted">
         <a href="https://github.com/Aditya09Goyal/github-GPT-using-RAG" target="_blank" rel="noreferrer" className="flex items-center gap-1.5 hover:text-text">

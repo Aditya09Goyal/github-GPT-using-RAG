@@ -1,12 +1,18 @@
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 
+from app.core.auth import current_user
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.schemas.repo import IndexRepoRequest, IndexJobStatus
-from app.services import jobs
+from app.services import jobs, user_repos
 from app.services.github_loader import clone_repo, collect_files, remove_clone
 from app.services.chunker import Chunk, chunk_files
-from app.services.overview import OVERVIEW_SOURCE, build_overview
+from app.services.overview import (
+    OVERVIEW_SOURCE,
+    _github_api,
+    _owner_repo,
+    build_overview,
+)
 from app.services.vectorstore import (
     add_chunks_to_store,
     collection_exists,
@@ -33,7 +39,17 @@ def _run_index(repo_url: str, name: str) -> None:
 
     with jobs.index_lock:  # one repo at a time on the free tier
         try:
-            jobs.update_job(name, status="running", stage="Downloading repository…")
+            jobs.update_job(name, status="running", stage="Checking repository size…")
+            owner, repo = _owner_repo(repo_url)
+            meta = _github_api(f"/repos/{owner}/{repo}") or {}
+            size_mb = (meta.get("size") or 0) / 1024  # GitHub reports KB
+            if size_mb > settings.max_repo_mb:
+                raise RepoTooLarge(
+                    f"This repo is about {size_mb:.0f} MB — too big for the free server (limit {settings.max_repo_mb} MB). "
+                    "Try a smaller repo."
+                )
+
+            jobs.update_job(name, stage="Downloading repository…")
             delete_collection(tmp)  # leftovers from a crashed earlier run
             repo_path = clone_repo(repo_url, name)
 
@@ -56,7 +72,14 @@ def _run_index(repo_url: str, name: str) -> None:
                 )
 
             jobs.update_job(name, stage="Reading repo info from GitHub…")
-            chunks.insert(0, Chunk(text=build_overview(repo_url, repo_path, files), source_path=OVERVIEW_SOURCE, chunk_index=0))
+            chunks.insert(
+                0,
+                Chunk(
+                    text=build_overview(repo_url, repo_path, files),
+                    source_path=OVERVIEW_SOURCE,
+                    chunk_index=0,
+                ),
+            )
 
             jobs.update_job(name, stage="Embedding chunks…", chunks=len(chunks))
             add_chunks_to_store(
@@ -64,6 +87,8 @@ def _run_index(repo_url: str, name: str) -> None:
             )
 
             rename_collection(tmp, name)
+            for login in jobs.get_job(name).requested_by:
+                user_repos.add_repo(login, name, repo_url, len(files), len(chunks))
             jobs.update_job(name, status="done", stage="Done")
             logger.info(
                 f"Indexed {repo_url} → '{name}' ({len(files)} files, {len(chunks)} chunks)"
@@ -86,24 +111,60 @@ def _run_index(repo_url: str, name: str) -> None:
                     logger.warning(f"Could not delete clone at {repo_path}")
 
 
-@router.post("", response_model=IndexJobStatus, status_code=202)
-def index_repo(request: IndexRepoRequest, background: BackgroundTasks):
+@router.get("")
+def my_repos(user: dict = Depends(current_user)):
     """
-    Starts indexing in the background and returns immediately (202).
+    The signed-in user's own repo list (what their sidebar shows).
+    """
+    return [
+        {
+            "name": r["collection_name"],
+            "url": r["repo_url"],
+            "files": r["files"],
+            "chunks": r["chunks"],
+            "indexed_at": r["indexed_at"].isoformat() if r["indexed_at"] else None,
+        }
+        for r in user_repos.list_repos(user["sub"])
+    ]
+
+
+@router.post("", response_model=IndexJobStatus, status_code=202)
+def index_repo(
+    request: IndexRepoRequest,
+    background: BackgroundTasks,
+    user: dict = Depends(current_user),
+):
+    """
+    Adds a repo to the signed-in user's list, indexing it in the background if needed (202).
     Poll GET /repos/{collection_name}/status until status is "done" or "failed".
+    If someone already indexed this repo, it's linked instantly (the vectors are shared).
     """
     name = request.collection_name
+    login = user["sub"]
 
-    if jobs.is_active(name):
-        return jobs.get_job(name).to_dict()
+    job = jobs.get_job(name)
+    if job and job.status in ("queued", "running"):
+        if login not in job.requested_by:
+            job.requested_by.append(
+                login
+            )  # someone else is indexing it → you get it too when it finishes
+        return job.to_dict()
 
     if collection_exists(name) and not request.force:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Collection '{name}' already exists. Send force=true to re-index it.",
+        files, chunks = user_repos.known_stats(name)
+        user_repos.add_repo(login, name, request.repo_url, files, chunks)
+        return IndexJobStatus(
+            collection_name=name,
+            repo_url=request.repo_url,
+            status="done",
+            stage="Done",
+            files=files,
+            chunks=chunks,
+            embedded=chunks,
+            started_at=0,
         )
 
-    job = jobs.create_job(name, request.repo_url)
+    job = jobs.create_job(name, request.repo_url, login)
     background.add_task(_run_index, request.repo_url, name)
     return job.to_dict()
 
@@ -114,6 +175,7 @@ def index_status(collection_name: str):
     if job:
         return job.to_dict()
     if collection_exists(collection_name):
+        # indexed before the last server restart
         return IndexJobStatus(
             collection_name=collection_name,
             repo_url="",
@@ -131,10 +193,11 @@ def index_status(collection_name: str):
 
 
 @router.delete("/{collection_name}", status_code=204)
-def delete_repo(collection_name: str):
+def remove_repo(collection_name: str, user: dict = Depends(current_user)):
     """
-    Deletes an indexed repo's vectors from the database.
+    Removes the repo from YOUR list. The vectors are deleted only when no user has it anymore.
     """
     if jobs.is_active(collection_name):
         raise HTTPException(status_code=409, detail="This repo is still being indexed.")
-    delete_collection(collection_name)
+    if user_repos.remove_repo(user["sub"], collection_name) == 0:
+        delete_collection(collection_name)
