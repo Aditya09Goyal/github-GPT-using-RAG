@@ -39,6 +39,12 @@ async def on_startup():
 
     ensure_table()  # per-user repo lists
 
+    # Hybrid search migration: full-text column (backfilled by Postgres, no re-index) + GIN index.
+    # Idempotent and never raises — if it can't run, search stays vector-only.
+    from app.services.vectorstore import ensure_hybrid_search_schema
+
+    ensure_hybrid_search_schema()
+
     # load the ONNX embedding model now, not on the first question after a (cold) start
     from app.services.embeddings import get_embedding_model
 

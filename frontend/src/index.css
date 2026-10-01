@@ -4,45 +4,75 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+  Design tokens (RGB triplets so Tailwind's /<alpha> works: bg-panel/80, border-line/60 …)
+  Light: warm paper neutrals.  Dark: deep slate with softly raised panels — never pure black.
+  Accent: electric indigo → violet.  Warm (amber): cited-line highlights & badges.  Ok: muted emerald.
+*/
 :root {
-  --bg: 250 250 250;
-  --side: 243 243 245;
-  --panel: 255 255 255;
-  --line: 228 228 231;
-  --text: 24 24 27;
-  --muted: 113 113 122;
+  --bg: 247 246 243;
+  --side: 241 239 235;
+  --panel: 255 255 253;
+  --panel-2: 250 249 246;
+  --line: 229 226 219;
+  --text: 30 28 34;
+  --muted: 113 110 120;
   --accent: 79 70 229;
-  --accent-soft: 238 242 255;
-  --accent-fill: 79 70 229;
-  --accent-2: 168 85 247; /* second gradient stop (violet) */
-  --ok: 22 163 74;
+  --accent-soft: 237 238 255;
+  --accent-fill: 91 84 240;
+  --accent-2: 139 92 246;
+  --warm: 180 100 10;
+  --warm-soft: 254 243 205;
+  --ok: 5 150 105;
   --warn: 217 119 6;
   --bad: 220 38 38;
+  --shadow: 28 25 23;
   color-scheme: light;
+
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-spring: cubic-bezier(0.34, 1.4, 0.64, 1); /* fallback for browsers without linear() */
+}
+@supports (transition-timing-function: linear(0, 1)) {
+  :root {
+    /* a real (slightly bouncy) spring curve */
+    --ease-spring: linear(0, 0.009, 0.035 2.1%, 0.141, 0.281 6.7%, 0.723 12.9%, 0.938 16.7%, 1.017, 1.077, 1.121, 1.149 24.3%,
+      1.159, 1.163, 1.161, 1.154 29.9%, 1.129 32.8%, 1.051 39.6%, 1.017 43.1%, 0.991, 0.977 51%, 0.974 53.8%, 0.975 57.1%,
+      0.997 69.8%, 1.003 76.9%, 1.004 83.8%, 1);
+  }
 }
 .dark {
-  --bg: 32 33 39;
-  --side: 39 41 48;
-  --panel: 45 47 55;
-  --line: 60 63 73;
-  --text: 234 236 241;
-  --muted: 163 167 180;
-  --accent: 140 150 250;
-  --accent-soft: 52 55 88;
+  --bg: 13 17 28;
+  --side: 17 21 34;
+  --panel: 24 29 44;
+  --panel-2: 30 36 54;
+  --line: 40 47 66;
+  --text: 226 231 240;
+  --muted: 140 150 172;
+  --accent: 165 168 255;
+  --accent-soft: 37 40 78;
   --accent-fill: 99 102 241;
-  --accent-2: 192 132 252;
-  --ok: 74 222 128;
+  --accent-2: 167 139 250;
+  --warm: 251 191 36;
+  --warm-soft: 61 49 22;
+  --ok: 52 211 153;
   --warn: 251 191 36;
   --bad: 248 113 113;
+  --shadow: 0 0 0;
   color-scheme: dark;
 }
 
 html, body, #root { height: 100%; }
-body { @apply bg-bg text-text font-sans antialiased; }
+body {
+  @apply bg-bg text-text font-sans antialiased;
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11", "ss01"; /* Inter's calmer alternates */
+  letter-spacing: -0.006em;
+  text-rendering: optimizeLegibility;
+}
+::selection { background: rgb(var(--accent-fill) / 0.28); }
 
-:focus-visible { outline: 2px solid rgb(var(--accent)); outline-offset: 2px; }
-input:focus-visible, textarea:focus-visible { outline: none; } /* their wrapper shows the focus border */
-.font-mono, code, pre { font-variant-ligatures: none; }
+:focus-visible { outline: 2px solid rgb(var(--accent)); outline-offset: 2px; border-radius: 6px; }
+input:focus-visible, textarea:focus-visible { outline: none; } /* their wrapper shows the focus ring */
+.font-mono, code, pre { font-variant-ligatures: none; letter-spacing: 0; }
 
 .scroll-thin { scrollbar-width: thin; scrollbar-color: rgb(var(--line)) transparent; }
 
@@ -54,39 +84,86 @@ input:focus-visible, textarea:focus-visible { outline: none; } /* their wrapper 
   color: transparent;
 }
 
-/* ---------- lively UI: buttons, glow, motion ---------- */
 @layer components {
-  /* gradient primary button: glow, lift on hover, press on click, light sweep */
+  /* ---------- surfaces ---------- */
+  /* a raised card: hairline border + layered, diffused shadow (depth without harsh edges) */
+  .surface {
+    @apply rounded-2xl border border-line/80 bg-panel;
+    box-shadow: 0 1px 0 rgb(255 255 255 / 0.04) inset, 0 1px 2px rgb(var(--shadow) / 0.06), 0 8px 24px -12px rgb(var(--shadow) / 0.18);
+  }
+  .dark .surface {
+    box-shadow: 0 1px 0 rgb(255 255 255 / 0.04) inset, 0 1px 2px rgb(0 0 0 / 0.3), 0 18px 40px -20px rgb(0 0 0 / 0.55);
+  }
+  /* soft page glow behind the main column (dark mode gets a faint indigo sky) */
+  .app-glow {
+    background:
+      radial-gradient(1100px 520px at 75% -12%, rgb(var(--accent-fill) / 0.07), transparent 60%),
+      radial-gradient(700px 400px at -10% 110%, rgb(var(--accent-2) / 0.05), transparent 60%),
+      rgb(var(--bg));
+  }
+
+  /* ---------- buttons ---------- */
+  /* gradient primary button: glow, lift on hover, spring press, light sweep */
   .btn-primary {
     @apply relative inline-flex items-center justify-center gap-1.5 overflow-hidden rounded-xl font-semibold text-white;
     background-image: linear-gradient(135deg, rgb(var(--accent-fill)), rgb(var(--accent-2)));
-    box-shadow: 0 6px 18px -6px rgb(var(--accent-fill) / 0.6);
-    transition: transform 0.18s ease, box-shadow 0.18s ease, opacity 0.18s ease;
+    box-shadow: 0 1px 0 rgb(255 255 255 / 0.18) inset, 0 6px 18px -6px rgb(var(--accent-fill) / 0.6);
+    transition: transform 0.35s var(--ease-spring), box-shadow 0.2s ease, opacity 0.2s ease;
   }
   .btn-primary::after {
     content: "";
     position: absolute;
     inset: 0;
-    background: linear-gradient(110deg, transparent 30%, rgb(255 255 255 / 0.35) 50%, transparent 70%);
+    background: linear-gradient(110deg, transparent 30%, rgb(255 255 255 / 0.3) 50%, transparent 70%);
     transform: translateX(-120%);
     transition: transform 0.7s ease;
     pointer-events: none;
   }
-  .btn-primary:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 10px 26px -8px rgb(var(--accent-fill) / 0.75); }
+  .btn-primary:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 1px 0 rgb(255 255 255 / 0.18) inset, 0 10px 26px -8px rgb(var(--accent-fill) / 0.75); }
   .btn-primary:hover:not(:disabled)::after { transform: translateX(120%); }
-  .btn-primary:active:not(:disabled) { transform: translateY(0) scale(0.96); }
+  .btn-primary:active:not(:disabled) { transform: scale(0.95); transition-duration: 0.08s; }
   .btn-primary:disabled { opacity: 0.4; box-shadow: none; cursor: not-allowed; }
 
-  /* cards / chips that rise and glow on hover */
-  .lift { transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease, background-color 0.2s ease, color 0.2s ease; }
-  .lift:hover { transform: translateY(-2px); border-color: rgb(var(--accent) / 0.6); box-shadow: 0 12px 24px -14px rgb(var(--accent-fill) / 0.55); }
-  .lift:active { transform: translateY(0) scale(0.98); }
+  /* quiet icon / text button used across toolbars */
+  .btn-ghost {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-lg text-muted;
+    transition: background-color 0.15s ease, color 0.15s ease, transform 0.35s var(--ease-spring);
+  }
+  .btn-ghost:where(:not(:disabled)):hover { @apply bg-line/50 text-text; } /* :where keeps specificity low so hover:text-* utilities win */
+  .btn-ghost:where(:not(:disabled)):active { transform: scale(0.92); transition-duration: 0.08s; }
+  .btn-ghost:disabled { opacity: 0.45; cursor: not-allowed; }
+
+  /* cards / chips that rise softly on hover and press on click */
+  .lift { transition: transform 0.4s var(--ease-spring), box-shadow 0.25s ease, border-color 0.2s ease, background-color 0.2s ease, color 0.2s ease; }
+  .lift:hover { transform: translateY(-2px); border-color: rgb(var(--accent) / 0.45); box-shadow: 0 12px 26px -16px rgb(var(--accent-fill) / 0.55); }
+  .lift:active { transform: scale(0.97); transition-duration: 0.08s; }
 
   /* input wrappers: soft accent halo while focused */
-  .glow-ring { transition: border-color 0.2s ease, box-shadow 0.25s ease; }
-  .glow-ring:focus-within { border-color: rgb(var(--accent)); box-shadow: 0 0 0 4px rgb(var(--accent) / 0.14), 0 10px 30px -14px rgb(var(--accent-fill) / 0.6); }
+  .glow-ring { transition: border-color 0.2s ease, box-shadow 0.3s var(--ease-out); }
+  .glow-ring:focus-within { border-color: rgb(var(--accent) / 0.7); box-shadow: 0 0 0 4px rgb(var(--accent) / 0.12), 0 12px 32px -16px rgb(var(--accent-fill) / 0.6); }
 
-  /* gradient text that slowly pans */
+  /* ---------- citations ---------- */
+  .chip {
+    @apply inline-flex max-w-full items-center gap-1.5 rounded-lg border border-line/80 bg-panel px-2 py-1 font-mono text-[11.5px] text-muted;
+    transition: transform 0.4s var(--ease-spring), border-color 0.2s ease, color 0.2s ease, background-color 0.2s ease, box-shadow 0.25s ease;
+  }
+  .chip:hover { @apply text-text; transform: translateY(-1px); border-color: rgb(var(--warm) / 0.55); box-shadow: 0 8px 18px -12px rgb(var(--warm) / 0.6); }
+  .chip:active { transform: scale(0.95); transition-duration: 0.08s; }
+  .line-badge { @apply rounded-md bg-warm-soft px-1.5 py-px text-[10.5px] font-semibold text-warm; }
+
+  /* highlighted line band in the file viewer */
+  .line-band {
+    background: linear-gradient(90deg, rgb(var(--warm) / 0.16), rgb(var(--warm) / 0.06) 60%, transparent);
+    box-shadow: inset 3px 0 0 rgb(var(--warm) / 0.85);
+    animation: bandIn 0.9s var(--ease-out) both;
+  }
+
+  /* ---------- collapsible (animates height without measuring) ---------- */
+  .expand { display: grid; grid-template-rows: 0fr; opacity: 0; transition: grid-template-rows 0.45s var(--ease-out), opacity 0.3s ease; }
+  .expand[data-open="true"] { grid-template-rows: 1fr; opacity: 1; }
+  .expand > * { min-height: 0; overflow: hidden; }
+
+  /* ---------- text effects ---------- */
   .text-gradient {
     background-image: linear-gradient(90deg, rgb(var(--accent)), rgb(var(--accent-2)), rgb(var(--accent)));
     background-size: 200% 100%;
@@ -95,8 +172,6 @@ input:focus-visible, textarea:focus-visible { outline: none; } /* their wrapper 
     color: transparent;
     animation: pan 6s linear infinite;
   }
-
-  /* "thinking…" text shimmer */
   .text-shimmer {
     background-image: linear-gradient(90deg, rgb(var(--muted)) 35%, rgb(var(--text)) 50%, rgb(var(--muted)) 65%);
     background-size: 200% 100%;
@@ -105,15 +180,13 @@ input:focus-visible, textarea:focus-visible { outline: none; } /* their wrapper 
     color: transparent;
     animation: pan 2s linear infinite;
   }
-
-  /* moving gradient for progress bars */
   .bar-shimmer {
     background-image: linear-gradient(90deg, rgb(var(--accent-fill)), rgb(var(--accent-2)), rgb(var(--accent-fill)));
     background-size: 200% 100%;
     animation: pan 1.6s linear infinite;
   }
 
-  /* drifting background glow for the welcome screen */
+  /* ---------- welcome screen backdrop ---------- */
   .aurora { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
   .aurora::before, .aurora::after {
     content: "";
@@ -121,17 +194,17 @@ input:focus-visible, textarea:focus-visible { outline: none; } /* their wrapper 
     width: 46rem;
     height: 46rem;
     border-radius: 9999px;
-    filter: blur(90px);
-    opacity: 0.16;
+    filter: blur(100px);
+    opacity: 0.13;
   }
   .aurora::before { background: rgb(var(--accent-fill)); top: -18rem; left: -12rem; animation: drift 18s ease-in-out infinite alternate; }
   .aurora::after { background: rgb(var(--accent-2)); bottom: -22rem; right: -14rem; animation: drift 22s ease-in-out infinite alternate-reverse; }
-  .dark .aurora::before, .dark .aurora::after { opacity: 0.22; }
+  .dark .aurora::before, .dark .aurora::after { opacity: 0.18; }
   .dot-grid {
     position: absolute;
     inset: 0;
     pointer-events: none;
-    background-image: radial-gradient(rgb(var(--text) / 0.07) 1px, transparent 1px);
+    background-image: radial-gradient(rgb(var(--text) / 0.06) 1px, transparent 1px);
     background-size: 22px 22px;
     mask-image: radial-gradient(ellipse at center, black 30%, transparent 75%);
   }
@@ -142,8 +215,13 @@ input:focus-visible, textarea:focus-visible { outline: none; } /* their wrapper 
   0% { transform: translate(0, 0) scale(1); }
   100% { transform: translate(6rem, 4rem) scale(1.15); }
 }
+@keyframes bandIn {
+  0% { opacity: 0; transform: scaleX(0.96); transform-origin: left; }
+  35% { opacity: 1; background-color: rgb(var(--warm) / 0.18); }
+  100% { opacity: 1; transform: none; background-color: transparent; }
+}
 
-/* ---------- code highlighting (works in both themes) ---------- */
+/* ---------- code highlighting (both themes; soft, low-glare colours) ---------- */
 .code { color: rgb(var(--text)); }
 .hljs-keyword, .hljs-selector-tag, .hljs-built_in, .hljs-type { color: #7c3aed; }
 .hljs-string, .hljs-attr, .hljs-template-tag { color: #0f766e; }
@@ -152,12 +230,12 @@ input:focus-visible, textarea:focus-visible { outline: none; } /* their wrapper 
 .hljs-title, .hljs-title.function_, .hljs-section { color: #2563eb; }
 .hljs-name, .hljs-tag { color: #be185d; }
 .hljs-meta, .hljs-variable, .hljs-params { color: #9a3412; }
-.dark .hljs-keyword, .dark .hljs-selector-tag, .dark .hljs-built_in, .dark .hljs-type { color: #c4a7ff; }
-.dark .hljs-string, .dark .hljs-attr, .dark .hljs-template-tag { color: #86efac; }
-.dark .hljs-number, .dark .hljs-literal { color: #fdba74; }
-.dark .hljs-title, .dark .hljs-title.function_, .dark .hljs-section { color: #93c5fd; }
-.dark .hljs-name, .dark .hljs-tag { color: #f9a8d4; }
-.dark .hljs-meta, .dark .hljs-variable, .dark .hljs-params { color: #fcd34d; }
+.dark .hljs-keyword, .dark .hljs-selector-tag, .dark .hljs-built_in, .dark .hljs-type { color: #c4b5fd; }
+.dark .hljs-string, .dark .hljs-attr, .dark .hljs-template-tag { color: #8ee6b5; }
+.dark .hljs-number, .dark .hljs-literal { color: #f9b98a; }
+.dark .hljs-title, .dark .hljs-title.function_, .dark .hljs-section { color: #9cc4fb; }
+.dark .hljs-name, .dark .hljs-tag { color: #f5a9cf; }
+.dark .hljs-meta, .dark .hljs-variable, .dark .hljs-params { color: #f6d27a; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }

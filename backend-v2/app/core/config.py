@@ -1,6 +1,7 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 import tempfile
 from pathlib import Path
+from typing import Literal
 
 
 class Settings(BaseSettings):
@@ -46,6 +47,11 @@ class Settings(BaseSettings):
 
     # --- Retrieval ---
     retriever_top_k: int = 8
+    # "hybrid" = full-text (exact identifiers like useAuth, PORT) + vector search, merged with
+    # Reciprocal Rank Fusion. "vector" = cosine similarity only (the old behaviour).
+    search_mode: Literal["hybrid", "vector"] = "hybrid"
+    rrf_k: int = 60  # RRF constant: score = sum of 1 / (rrf_k + rank) over both ranked lists
+    hybrid_candidates: int = 40  # how many results each list (keyword, vector) brings into the fusion
 
     # --- Conversation memory ---
     history_max_messages: int = 6  # how many earlier messages (user + assistant) the LLM sees

@@ -1,0 +1,209 @@
+{
+  "version": 1,
+  "description": "Curated retrieval + answer evaluation set. expected_files = files that contain the answer (a hit on ANY of them counts for Hit@k / MRR). reference_answer is what the LLM judge compares against. Tags: identifier = question names an exact code identifier (hybrid search target), concept = natural-language question, multi_file = answer spans several files.",
+  "repos": [
+    {
+      "repo_url": "https://github.com/Aditya09Goyal/github-GPT-using-RAG",
+      "collection_name": "aditya09goyal-github-gpt-using-rag",
+      "notes": "Ground truth written against the main branch. Index the repo in the app (or re-index after merging line-number support) before running the eval.",
+      "questions": [
+        {
+          "id": "ghgpt-01",
+          "question": "How are repository files split into chunks, and what chunk size and overlap are used?",
+          "expected_files": ["backend-v2/app/services/chunker.py", "backend-v2/app/core/config.py"],
+          "reference_answer": "chunk_files reads each file and splits it with LangChain's RecursiveCharacterTextSplitter, using a language-aware splitter (RecursiveCharacterTextSplitter.from_language) chosen by file extension via LANGUAGE_BY_EXT, or a plain recursive splitter otherwise. Defaults are chunk_size=1000 and chunk_overlap=200 characters (settings in config.py). Each chunk text is prefixed with a 'File: <relative path>' line.",
+          "tags": ["concept", "multi_file"]
+        },
+        {
+          "id": "ghgpt-02",
+          "question": "Which embedding model is used and how is it loaded?",
+          "expected_files": ["backend-v2/app/services/embeddings.py", "backend-v2/app/core/config.py"],
+          "reference_answer": "sentence-transformers/all-MiniLM-L6-v2 (384-dim), run through fastembed on ONNX Runtime instead of PyTorch to save RAM, wrapped in a LangChain-compatible FastEmbedEmbeddings class with threads=1. get_embedding_model() keeps a module-level singleton; main.py loads it at startup so the first question isn't slow.",
+          "tags": ["concept", "multi_file"]
+        },
+        {
+          "id": "ghgpt-03",
+          "question": "What is MAX_FILE_BYTES and what is it used for?",
+          "expected_files": ["backend-v2/app/services/github_loader.py"],
+          "reference_answer": "MAX_FILE_BYTES = 200_000 (about 200 KB) in github_loader.py. collect_files skips any file larger than that (e.g. minified bundles or data dumps) so they are not indexed.",
+          "tags": ["identifier"]
+        },
+        {
+          "id": "ghgpt-04",
+          "question": "Which folders are skipped when collecting files to index?",
+          "expected_files": ["backend-v2/app/services/github_loader.py"],
+          "reference_answer": "IGNORED_DIRS: .git, node_modules, venv, __pycache__, dist, build, .next, .venv, .cache, .vite, vendor, target, coverage, .idea, .vscode, site-packages. Lockfiles in IGNORED_FILES and *.min.js / *.min.css / *.map files are skipped too.",
+          "tags": ["concept"]
+        },
+        {
+          "id": "ghgpt-05",
+          "question": "How does needs_rewrite decide whether a follow-up question must be rewritten?",
+          "expected_files": ["backend-v2/app/services/rag_chain.py"],
+          "reference_answer": "needs_rewrite first removes phrases like 'this project/repo/codebase/app' (the _THIS_REPO regex), then returns True if the question has 3 or fewer words or contains a word that refers back to the conversation (the _REFERS_BACK regex: it, this, that, they, them, previous, same, more, ...). Only then is the question condensed with an LLM call.",
+          "tags": ["identifier"]
+        },
+        {
+          "id": "ghgpt-06",
+          "question": "What happens in condense_question if the small condense model fails?",
+          "expected_files": ["backend-v2/app/services/rag_chain.py"],
+          "reference_answer": "It logs a warning, sets the module flag _condense_broken = True so the small model isn't tried again, and retries the rewrite with the main LLM (get_llm). If that also fails it logs the exception and returns the original question unchanged.",
+          "tags": ["identifier"]
+        },
+        {
+          "id": "ghgpt-07",
+          "question": "Which LLM generates the answers, and with what temperature and reasoning effort?",
+          "expected_files": ["backend-v2/app/services/rag_chain.py", "backend-v2/app/core/config.py"],
+          "reference_answer": "Groq's openai/gpt-oss-120b via langchain_groq ChatGroq, temperature 0.2, with reasoning_effort='low' (only passed for gpt-oss models). Follow-up rewriting uses the smaller openai/gpt-oss-20b at temperature 0.",
+          "tags": ["concept", "multi_file"]
+        },
+        {
+          "id": "ghgpt-08",
+          "question": "How does indexing avoid leaving a half-indexed repository behind if it crashes?",
+          "expected_files": ["backend-v2/app/api/routes_repo.py", "backend-v2/app/services/vectorstore.py"],
+          "reference_answer": "_run_index writes all vectors into a temporary '<name>__tmp' collection and only calls rename_collection(tmp, name) once everything succeeded; rename_collection deletes any older copy and renames in one transaction. On any failure the tmp collection is deleted, and leftovers from a previous crashed run are deleted before starting.",
+          "tags": ["concept", "multi_file"]
+        },
+        {
+          "id": "ghgpt-09",
+          "question": "When is a repository rejected with RepoTooLarge?",
+          "expected_files": ["backend-v2/app/api/routes_repo.py", "backend-v2/app/core/config.py"],
+          "reference_answer": "Before cloning, if the GitHub API reports a size above max_repo_mb (150 MB); after scanning, if there are no indexable files or more than max_files (1500); and after chunking, if there are more than max_chunks (8000) chunks.",
+          "tags": ["identifier", "multi_file"]
+        },
+        {
+          "id": "ghgpt-10",
+          "question": "How does the GitHub OAuth login flow work on the backend?",
+          "expected_files": ["backend-v2/app/api/routes_auth.py", "backend-v2/app/core/auth.py"],
+          "reference_answer": "GET /auth/github/login redirects to GitHub's authorize URL with client_id, redirect_uri, scope=read:user and a signed 10-minute state JWT (CSRF protection). GET /auth/github/callback verifies the state, exchanges the code for a GitHub access token with httpx, reads /user, then discards the GitHub token and redirects to the frontend with the app's own JWT (create_token) in the URL #hash.",
+          "tags": ["concept", "multi_file"]
+        },
+        {
+          "id": "ghgpt-11",
+          "question": "How are the app's login tokens signed and how long are they valid?",
+          "expected_files": ["backend-v2/app/core/auth.py", "backend-v2/app/core/config.py"],
+          "reference_answer": "create_token signs a JWT with HS256 using settings.jwt_secret. The payload holds sub (GitHub login), name, avatar, iat and exp = now + jwt_expire_days (default 7 days). decode_token returns 401 for expired or invalid tokens.",
+          "tags": ["concept", "multi_file"]
+        },
+        {
+          "id": "ghgpt-12",
+          "question": "What columns does the user_repos table have?",
+          "expected_files": ["backend-v2/app/services/user_repos.py"],
+          "reference_answer": "login, collection_name, repo_url, files, chunks, indexed_at (TIMESTAMPTZ default now()), with primary key (login, collection_name). It records which user has which repo in their list while the vectors themselves are shared.",
+          "tags": ["identifier"]
+        },
+        {
+          "id": "ghgpt-13",
+          "question": "What errors can POST /chat return before answering, and why?",
+          "expected_files": ["backend-v2/app/api/routes_chat.py", "backend-v2/app/services/user_repos.py"],
+          "reference_answer": "current_user returns 401 without a valid Bearer token. _ensure_collection uses user_repos.access: 403 if the repo isn't in the user's list, 404 if the collection has no vectors. If answering fails, 500 'Chat failed: ...'.",
+          "tags": ["concept", "multi_file"]
+        },
+        {
+          "id": "ghgpt-14",
+          "question": "How does the frontend parse the streamed answer from /chat/stream?",
+          "expected_files": ["frontend/src/api/client.ts"],
+          "reference_answer": "streamQuestion POSTs with fetch (EventSource only supports GET), pipes the body through TextDecoderStream, buffers text and splits Server-Sent Event blocks on blank lines, reads 'event:' and 'data:' lines, JSON-parses data, and dispatches sources/token events to handlers; 'error' throws an ApiError and 'done' resolves. A stream that closes without 'done' raises an error.",
+          "tags": ["concept"]
+        },
+        {
+          "id": "ghgpt-15",
+          "question": "What does collectionFromRepo do?",
+          "expected_files": ["frontend/src/lib/repo.ts"],
+          "reference_answer": "It builds a safe collection name from owner and repo: lowercases 'owner-repo', replaces runs of invalid characters with '-', collapses dashes, trims leading/trailing - or _, pads names shorter than 3 chars with '-repo', and cuts to 63 characters.",
+          "tags": ["identifier"]
+        },
+        {
+          "id": "ghgpt-16",
+          "question": "What information goes into the repository overview chunk?",
+          "expected_files": ["backend-v2/app/services/overview.py"],
+          "reference_answer": "build_overview creates one text block: owner/repo and URL, GitHub description, topics, stars/forks/default branch, owner, contributors with commit counts, languages (all via the GitHub REST API), the sorted file list (up to 200 paths) and the first 1500 characters of the README. It is stored under the special source '__overview__' and always added to the LLM context.",
+          "tags": ["concept"]
+        },
+        {
+          "id": "ghgpt-17",
+          "question": "Where and how are chat messages saved in the browser?",
+          "expected_files": ["frontend/src/App.tsx", "frontend/src/lib/storage.ts"],
+          "reference_answer": "App.tsx saves chats to localStorage via save() from lib/storage.ts under a per-user key ghgpt:chats:<login>, keeping only the last 60 messages per repo. On load, streaming flags are cleared because interrupted answers will never finish. save/load swallow storage errors.",
+          "tags": ["concept", "multi_file"]
+        },
+        {
+          "id": "ghgpt-18",
+          "question": "How does the frontend wait for a repository to finish indexing?",
+          "expected_files": ["frontend/src/api/client.ts", "frontend/src/components/IndexPanel.tsx"],
+          "reference_answer": "indexRepo calls POST /repos, then polls GET /repos/{name}/status every 2 seconds, calling onProgress with the job each time, until status is done or failed. A 404 is thrown immediately (server lost the job); other errors are retried up to 15 times in a row. IndexPanel shows the stage, a step indicator and an embedded/chunks progress bar.",
+          "tags": ["concept", "multi_file"]
+        },
+        {
+          "id": "ghgpt-19",
+          "question": "How many earlier messages are sent to the LLM as conversation history?",
+          "expected_files": ["backend-v2/app/core/config.py", "backend-v2/app/services/rag_chain.py", "frontend/src/App.tsx"],
+          "reference_answer": "The frontend sends the last 10 non-error messages (HISTORY_MESSAGES). The backend's _trim_history keeps only the last history_max_messages = 6 and cuts each to history_max_chars = 1500 characters.",
+          "tags": ["concept", "multi_file"]
+        },
+        {
+          "id": "ghgpt-20",
+          "question": "How is the backend Docker image built and started?",
+          "expected_files": ["backend-v2/Dockerfile"],
+          "reference_answer": "FROM python:3.12-slim, installs git, installs dependencies from pyproject.toml with uv, downloads the all-MiniLM-L6-v2 fastembed model at build time into /app/.cache/fastembed, copies the app, and runs uvicorn app.main:app on host 0.0.0.0 and port $PORT (default 8000).",
+          "tags": ["concept"]
+        },
+        {
+          "id": "ghgpt-21",
+          "question": "How does the file viewer load a file's contents?",
+          "expected_files": ["frontend/src/components/FileView.tsx", "frontend/src/lib/repo.ts"],
+          "reference_answer": "FileView fetches the raw file from raw.githubusercontent.com (rawFileUrl: owner/repo/HEAD/path) and caches texts in an in-memory Map keyed by repo and path. It highlights the text with highlight.js and shows line numbers plus a link to the file on GitHub (blobUrl).",
+          "tags": ["concept", "multi_file"]
+        },
+        {
+          "id": "ghgpt-22",
+          "question": "Which languages get code-aware splitting in LANGUAGE_BY_EXT?",
+          "expected_files": ["backend-v2/app/services/chunker.py"],
+          "reference_answer": "Python, JS (.js/.jsx), TS (.ts/.tsx), Java, Go, Rust, C (.c/.h), C++ (.cpp/.hpp), C#, Kotlin, PHP, Ruby, Swift, Markdown and HTML. Other extensions use a plain RecursiveCharacterTextSplitter.",
+          "tags": ["identifier"]
+        },
+        {
+          "id": "ghgpt-23",
+          "question": "What happens when a user removes a repo from their list?",
+          "expected_files": ["backend-v2/app/api/routes_repo.py", "backend-v2/app/services/user_repos.py"],
+          "reference_answer": "DELETE /repos/{collection_name} returns 409 if the repo is still being indexed. Otherwise user_repos.remove_repo deletes only that user's row and returns how many users still have the repo; the vectors are deleted with delete_collection only when nobody has it anymore.",
+          "tags": ["concept", "multi_file"]
+        },
+        {
+          "id": "ghgpt-24",
+          "question": "Why does similarity_search use raw SQL instead of going through PGVector?",
+          "expected_files": ["backend-v2/app/services/vectorstore.py"],
+          "reference_answer": "PGVector added extra database round trips per question (collection lookup, and on first use CREATE EXTENSION / tables / collection), which is slow against a remote Neon database. The raw SQL does the top-k cosine search ordered by embedding <=> query vector in one round trip.",
+          "tags": ["identifier"]
+        },
+        {
+          "id": "ghgpt-25",
+          "question": "How does the app wake up the free-tier backend when the page opens?",
+          "expected_files": ["frontend/src/App.tsx", "frontend/src/components/StatusBar.tsx"],
+          "reference_answer": "On mount App pings GET /health and retries every 5 seconds up to 18 more times. After 2.5 s without a reply the status becomes 'waking'; success sets 'online', giving up sets 'offline'. StatusBar shows a coloured dot and label for each state.",
+          "tags": ["concept", "multi_file"]
+        },
+        {
+          "id": "ghgpt-26",
+          "question": "What does the bench_models.py script measure?",
+          "expected_files": ["backend-v2/scripts/bench_models.py"],
+          "reference_answer": "It times candidate Groq models (gpt-oss-20b, qwen, allam-2-7b, gpt-oss-120b) on the follow-up rewrite task using CONDENSE_PROMPT, running each test case 3 times, and prints the median latency and the rewrites so you can choose CONDENSE_MODEL.",
+          "tags": ["identifier"]
+        },
+        {
+          "id": "ghgpt-27",
+          "question": "How does the frontend read the logged-in user without calling the server?",
+          "expected_files": ["frontend/src/lib/auth.ts"],
+          "reference_answer": "userFromToken base64-decodes the JWT payload from localStorage (key ghgpt:token) and returns login/name/avatar if sub exists and exp hasn't passed. consumeLoginRedirect saves the token from the /#token=... redirect and removes it from the address bar.",
+          "tags": ["concept"]
+        },
+        {
+          "id": "ghgpt-28",
+          "question": "Where is the per-repo vector store cached and when is the cache cleared?",
+          "expected_files": ["backend-v2/app/services/vectorstore.py"],
+          "reference_answer": "get_vectorstore caches one PGVector per collection in the module-level _stores dict (guarded by _cache_lock), and overview docs are cached in _overviews. _forget clears both when a collection is deleted or renamed (delete_collection, rename_collection).",
+          "tags": ["concept"]
+        }
+      ]
+    }
+  ]
+}
