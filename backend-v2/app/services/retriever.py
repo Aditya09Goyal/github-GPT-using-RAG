@@ -98,6 +98,21 @@ def get_retriever(
     )
 
 
+def is_relevant(doc: Document, max_distance: float | None = None) -> bool:
+    """
+    Keeps a chunk if it matched a keyword of the question, OR its meaning is close enough
+    (cosine distance <= max_vector_distance). Chunks with no retrieval info are always kept.
+    """
+    r = doc.metadata.get("retrieval")
+    if not r:
+        return True  # plain vector mode: no info to judge with
+    if r.get("keyword_rank") is not None:
+        return True  # the question's words appear in this chunk
+    dist = r.get("vector_distance")
+    limit = settings.max_vector_distance if max_distance is None else max_distance
+    return dist is None or dist <= limit
+
+
 def retrieve_relevant_chunks(
     query: str,
     collection_name: str,
@@ -117,6 +132,10 @@ def retrieve_relevant_chunks(
     if mode == "hybrid":
         ts_query = keyword_query(query)
         results = hybrid_search(collection_name, query, ts_query, k)
+        kept = [d for d in results if is_relevant(d)]
+        if len(kept) < len(results):
+            logger.info(f"Relevance filter dropped {len(results) - len(kept)} of {len(results)} chunks (off-topic)")
+        results = kept
     else:
         ts_query = None
         results = similarity_search(collection_name, query, k)
@@ -127,7 +146,7 @@ def retrieve_relevant_chunks(
     )
     for doc in results:
         m = doc.metadata
-        logger.debug(
+        logger.info(
             f"  - {m.get('source')} L{m.get('start_line')}-{m.get('end_line')} "
             f"(chunk {m.get('chunk_index')}) {m.get('retrieval', '')}"
         )

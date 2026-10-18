@@ -18,10 +18,9 @@ class IndexRepoRequest(BaseModel):
         pattern=GITHUB_URL_PATTERN,
         description="Full GitHub repo URL, e.g. https://github.com/owner/repo",
     )
-    collection_name: str = Field(
-        ...,
-        pattern=COLLECTION_NAME_PATTERN,
-        description="Unique name to store this repo's vectors under (3-63 chars: letters, digits, - or _)",
+    collection_name: str | None = Field(
+        None,
+        description="Ignored — the server builds the name from repo_url",
     )
     force: bool = Field(
         False,
@@ -54,3 +53,4 @@ class IndexJobStatus(BaseModel):
     embedded: int
     error: str | None = None
     started_at: float
+    commit_sha: str | None = None  # the exact commit that was indexed

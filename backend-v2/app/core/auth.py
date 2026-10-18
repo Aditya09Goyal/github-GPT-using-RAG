@@ -17,7 +17,7 @@ def create_token(user: dict) -> str:
         "name": user.get("name") or user["login"],
         "avatar": user.get("avatar_url", ""),
         "iat": now,
-        "exp": now + settings.jwt_expire_days * 86400,
+        "exp": now + settings.jwt_expire_hours * 3600,
     }
     return jwt.encode(payload, settings.jwt_secret, algorithm="HS256")
 

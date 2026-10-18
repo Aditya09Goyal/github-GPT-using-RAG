@@ -229,7 +229,9 @@ _HYBRID_SQL = text(
         SELECT uuid FROM langchain_pg_collection WHERE name = :name
     ),
     vec AS (
-        SELECT e.id, ROW_NUMBER() OVER (ORDER BY e.embedding <=> CAST(:vec AS vector)) AS rnk
+        SELECT e.id,
+               ROW_NUMBER() OVER (ORDER BY e.embedding <=> CAST(:vec AS vector)) AS rnk,
+               e.embedding <=> CAST(:vec AS vector) AS dist
         FROM langchain_pg_embedding e
         WHERE e.collection_id = (SELECT uuid FROM coll)
           AND e.cmetadata->>'source' IS DISTINCT FROM :overview
@@ -250,7 +252,7 @@ _HYBRID_SQL = text(
         FROM (SELECT id, rnk FROM vec UNION ALL SELECT id, rnk FROM kw) ranked
         GROUP BY id
     )
-    SELECT e.document, e.cmetadata, f.score, v.rnk AS vector_rank, k.rnk AS keyword_rank
+    SELECT e.document, e.cmetadata, f.score, v.rnk AS vector_rank, k.rnk AS keyword_rank, v.dist AS vector_distance
     FROM fused f
     JOIN langchain_pg_embedding e ON e.id = f.id
     LEFT JOIN vec v ON v.id = f.id
@@ -290,7 +292,12 @@ def hybrid_search(collection_name: str, query: str, ts_query: str | None, k: int
 
     docs = _to_documents(rows)
     for doc, r in zip(docs, rows):
-        doc.metadata["retrieval"] = {"score": float(r[2]), "vector_rank": r[3], "keyword_rank": r[4]}
+        doc.metadata["retrieval"] = {
+            "score": float(r[2]),
+            "vector_rank": r[3],
+            "keyword_rank": r[4],
+            "vector_distance": float(r[5]) if r[5] is not None else None,
+        }
     return docs
 
 

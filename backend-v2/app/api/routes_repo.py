@@ -1,11 +1,21 @@
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+import hashlib
+import queue
+import re
+import threading
+
+from fastapi import APIRouter, Depends, HTTPException
 
 from app.core.auth import current_user
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.schemas.repo import IndexRepoRequest, IndexJobStatus
 from app.services import jobs, user_repos
-from app.services.github_loader import clone_repo, collect_files, remove_clone
+from app.services.github_loader import (
+    clone_repo,
+    collect_files,
+    get_commit_sha,
+    remove_clone,
+)
 from app.services.chunker import Chunk, chunk_files
 from app.services.overview import (
     OVERVIEW_SOURCE,
@@ -22,6 +32,18 @@ from app.services.vectorstore import (
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/repos", tags=["repos"])
+
+
+def collection_name_for(repo_url: str) -> str:
+    """
+    Server decides the collection name, so two different repos can never share one.
+    Example: github.com/foo/bar-baz -> foo-bar-baz-cd6ffb27
+    """
+    owner, repo = _owner_repo(repo_url)
+    canonical = f"{owner}/{repo}".lower()  # GitHub names are case-insensitive
+    slug = re.sub(r"[^a-z0-9]+", "-", canonical).strip("-")[:50].strip("-")
+    short_hash = hashlib.sha256(canonical.encode()).hexdigest()[:8]
+    return f"{slug}-{short_hash}"
 
 
 class RepoTooLarge(Exception):
@@ -41,7 +63,13 @@ def _run_index(repo_url: str, name: str) -> None:
         try:
             jobs.update_job(name, status="running", stage="Checking repository size…")
             owner, repo = _owner_repo(repo_url)
-            meta = _github_api(f"/repos/{owner}/{repo}") or {}
+            meta = _github_api(f"/repos/{owner}/{repo}")
+            if not meta:
+                # GitHub didn't answer (rate limit, repo missing or private) — never assume size 0
+                raise RepoTooLarge(
+                    "Couldn't check this repo on GitHub right now (GitHub limit reached, or the repo "
+                    "doesn't exist / isn't public). Try again in a few minutes."
+                )
             size_mb = (meta.get("size") or 0) / 1024  # GitHub reports KB
             if size_mb > settings.max_repo_mb:
                 raise RepoTooLarge(
@@ -52,6 +80,8 @@ def _run_index(repo_url: str, name: str) -> None:
             jobs.update_job(name, stage="Downloading repository…")
             delete_collection(tmp)  # leftovers from a crashed earlier run
             repo_path = clone_repo(repo_url, name)
+            sha = get_commit_sha(repo_path)  # remember exactly which version we index
+            jobs.update_job(name, commit_sha=sha)
 
             jobs.update_job(name, stage="Scanning files…")
             files = collect_files(repo_path)
@@ -87,8 +117,11 @@ def _run_index(repo_url: str, name: str) -> None:
             )
 
             rename_collection(tmp, name)
+            user_repos.set_commit_sha(
+                name, sha
+            )  # users who already had it see the new version too
             for login in jobs.get_job(name).requested_by:
-                user_repos.add_repo(login, name, repo_url, len(files), len(chunks))
+                user_repos.add_repo(login, name, repo_url, len(files), len(chunks), sha)
             jobs.update_job(name, status="done", stage="Done")
             logger.info(
                 f"Indexed {repo_url} → '{name}' ({len(files)} files, {len(chunks)} chunks)"
@@ -111,6 +144,30 @@ def _run_index(repo_url: str, name: str) -> None:
                     logger.warning(f"Could not delete clone at {repo_path}")
 
 
+# ---------- Indexing queue ----------
+# Before: every waiting job sat inside a FastAPI thread, blocked on index_lock.
+# ~40 waiting jobs used up every thread and the whole API froze.
+# Now: jobs wait in this queue (costs no thread), and ONE worker thread indexes them one by one.
+MAX_QUEUED_JOBS = 20
+_index_queue: "queue.Queue[tuple[str, str]]" = queue.Queue()
+
+
+def _index_worker() -> None:
+    while True:
+        repo_url, name = _index_queue.get()  # waits here until a job arrives
+        try:
+            _run_index(repo_url, name)
+        except Exception:
+            logger.exception(
+                f"Index worker error on {repo_url}"
+            )  # never let the worker die
+        finally:
+            _index_queue.task_done()
+
+
+threading.Thread(target=_index_worker, daemon=True, name="index-worker").start()
+
+
 @router.get("")
 def my_repos(user: dict = Depends(current_user)):
     """
@@ -123,6 +180,7 @@ def my_repos(user: dict = Depends(current_user)):
             "files": r["files"],
             "chunks": r["chunks"],
             "indexed_at": r["indexed_at"].isoformat() if r["indexed_at"] else None,
+            "commit_sha": r["commit_sha"],
         }
         for r in user_repos.list_repos(user["sub"])
     ]
@@ -131,7 +189,6 @@ def my_repos(user: dict = Depends(current_user)):
 @router.post("", response_model=IndexJobStatus, status_code=202)
 def index_repo(
     request: IndexRepoRequest,
-    background: BackgroundTasks,
     user: dict = Depends(current_user),
 ):
     """
@@ -139,7 +196,7 @@ def index_repo(
     Poll GET /repos/{collection_name}/status until status is "done" or "failed".
     If someone already indexed this repo, it's linked instantly (the vectors are shared).
     """
-    name = request.collection_name
+    name = collection_name_for(request.repo_url)
     login = user["sub"]
 
     job = jobs.get_job(name)
@@ -151,8 +208,8 @@ def index_repo(
         return job.to_dict()
 
     if collection_exists(name) and not request.force:
-        files, chunks = user_repos.known_stats(name)
-        user_repos.add_repo(login, name, request.repo_url, files, chunks)
+        files, chunks, sha = user_repos.known_stats(name)
+        user_repos.add_repo(login, name, request.repo_url, files, chunks, sha)
         return IndexJobStatus(
             collection_name=name,
             repo_url=request.repo_url,
@@ -162,10 +219,17 @@ def index_repo(
             chunks=chunks,
             embedded=chunks,
             started_at=0,
+            commit_sha=sha,
+        )
+
+    if _index_queue.qsize() >= MAX_QUEUED_JOBS:
+        raise HTTPException(
+            status_code=503,
+            detail="Too many repos are waiting to be indexed — try again in a few minutes.",
         )
 
     job = jobs.create_job(name, request.repo_url, login)
-    background.add_task(_run_index, request.repo_url, name)
+    _index_queue.put((request.repo_url, name))  # the worker thread picks it up
     return job.to_dict()
 
 

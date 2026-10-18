@@ -1,3 +1,4 @@
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 import tempfile
 from pathlib import Path
@@ -16,11 +17,15 @@ class Settings(BaseSettings):
     google_api_key: str | None = None
 
     # --- GitHub access ---
-    github_token: str | None = None  # optional: only needed for private repos / higher rate limits
+    github_token: str | None = (
+        None  # optional: only needed for private repos / higher rate limits
+    )
 
     # --- Embedding model ---
     embedding_model_name: str = "sentence-transformers/all-MiniLM-L6-v2"
-    embedding_cache_dir: str = str(Path(__file__).resolve().parent.parent.parent / ".cache" / "fastembed")
+    embedding_cache_dir: str = str(
+        Path(__file__).resolve().parent.parent.parent / ".cache" / "fastembed"
+    )
 
     # --- Vector store ---
     database_url: str  # Neon connection string (postgresql://...), set in .env
@@ -34,35 +39,65 @@ class Settings(BaseSettings):
     chunk_overlap: int = 200
 
     # --- Limits for big repos (free tier = 512 MB RAM, slow CPU) ---
-    max_repo_mb: int = 150  # checked on GitHub BEFORE cloning, so huge repos fail in 1 second, not after a long download
-    max_files: int = 1500  # repos with more indexable files than this are rejected with a clear message
-    max_chunks: int = 8000  # same idea for total chunks — keeps embedding time and DB size sane
-    embed_batch_size: int = 64  # chunks embedded + saved per step (smaller = less RAM, more progress updates)
+    max_repo_mb: int = (
+        150  # checked on GitHub BEFORE cloning, so huge repos fail in 1 second, not after a long download
+    )
+    max_files: int = (
+        1500  # repos with more indexable files than this are rejected with a clear message
+    )
+    max_chunks: int = (
+        8000  # same idea for total chunks — keeps embedding time and DB size sane
+    )
+    embed_batch_size: int = (
+        64  # chunks embedded + saved per step (smaller = less RAM, more progress updates)
+    )
 
     # --- LLM ---
     llm_model: str = "openai/gpt-oss-120b"  # writes the answers
-    llm_reasoning_effort: str = "low"  # gpt-oss thinks before answering; "low" = first token much sooner
-    condense_model: str = "openai/gpt-oss-20b"  # only rewrites follow-up questions (small + fast)
-    condense_reasoning_effort: str | None = None  # None = auto: "low" for gpt-oss, "none" for qwen (no thinking)
+    llm_reasoning_effort: str = (
+        "low"  # gpt-oss thinks before answering; "low" = first token much sooner
+    )
+    condense_model: str = (
+        "openai/gpt-oss-20b"  # only rewrites follow-up questions (small + fast)
+    )
+    condense_reasoning_effort: str | None = (
+        None  # None = auto: "low" for gpt-oss, "none" for qwen (no thinking)
+    )
 
     # --- Retrieval ---
     retriever_top_k: int = 8
     # "hybrid" = full-text (exact identifiers like useAuth, PORT) + vector search, merged with
     # Reciprocal Rank Fusion. "vector" = cosine similarity only (the old behaviour).
     search_mode: Literal["hybrid", "vector"] = "hybrid"
-    rrf_k: int = 60  # RRF constant: score = sum of 1 / (rrf_k + rank) over both ranked lists
-    hybrid_candidates: int = 40  # how many results each list (keyword, vector) brings into the fusion
+    rrf_k: int = (
+        60  # RRF constant: score = sum of 1 / (rrf_k + rank) over both ranked lists
+    )
+    hybrid_candidates: int = (
+        40  # how many results each list (keyword, vector) brings into the fusion
+    )
+    # Relevance cut-off: a chunk is dropped when it matched NO keyword AND its cosine distance
+    # to the question is above this (0 = identical, 1 = unrelated). Stops off-topic questions
+    # from getting 8 random chunks. Tune it with scripts/eval.py; set to 2 to switch it off.
+    max_vector_distance: float = 0.8
 
     # --- Conversation memory ---
-    history_max_messages: int = 6  # how many earlier messages (user + assistant) the LLM sees
-    history_max_chars: int = 1500  # long earlier answers are cut to this length to save tokens
+    history_max_messages: int = (
+        6  # how many earlier messages (user + assistant) the LLM sees
+    )
+    history_max_chars: int = (
+        1500  # long earlier answers are cut to this length to save tokens
+    )
 
     # --- Login with GitHub (OAuth App: github.com/settings/developers) ---
     github_client_id: str | None = None
     github_client_secret: str | None = None
-    jwt_secret: str = "change-me-in-production"  # signs our own login tokens — set a long random value on Render
-    jwt_expire_days: int = 7
-    backend_url: str = "http://localhost:8000"  # where GitHub sends users back (…/auth/github/callback)
+    jwt_secret: str = Field(
+        min_length=32
+    )  # REQUIRED — no default, so the app won't start without a real secret
+    jwt_expire_hours: int = 4  # login lasts 4 hours, then sign in with GitHub again
+    backend_url: str = (
+        "http://localhost:8000"  # where GitHub sends users back (…/auth/github/callback)
+    )
     frontend_url: str = "http://localhost:3000"  # where we send users after login
 
     # --- CORS ---

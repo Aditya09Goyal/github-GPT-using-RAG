@@ -22,13 +22,17 @@ _llm: ChatGroq | None = None
 _condense_llm: ChatGroq | None = None
 _condense_broken = False  # set after the small model fails once, so we don't pay for the failure every time
 
-NO_CONTEXT_ANSWER = "Ummn, Will improve myself for such bad results😓."
+NO_CONTEXT_ANSWER = (
+    "I couldn't find anything about that in this repository's indexed code. "
+    "Try rephrasing, or ask about a specific file or function."
+)
 
 SYSTEM_PROMPT = """You are a helpful assistant answering questions about a GitHub repository.
 Use ONLY the context below to answer. The first block is a REPOSITORY OVERVIEW (GitHub description, contributors, languages, file list, README start); the rest are relevant pieces of the code.
 The earlier conversation is only there to help you understand what the user is referring to — facts must come from the context.
 You may explain what the code does based on what you can see in it. If the question has several parts, answer every part you can and say briefly which part isn't in the context. Never make things up.
-Each code block is labelled with its file and line range, e.g. [Source: app/auth.py · L12-40]. When you point to specific code, name the file and, where it helps, the lines (e.g. app/auth.py L12-40).
+Each code block starts with a number and its source, e.g. [2] [Source: app/auth.py · L12-40].
+Every time you use information from a code block, cite its number in square brackets right after that sentence, e.g. "Tokens are checked in current_user [2]." Cite blocks separately like [1][3]. Only cite blocks you actually used, never cite the repository overview, and never invent numbers. You may also name the file and lines in your text.
 Context:
 {context}"""
 
@@ -93,12 +97,55 @@ def source_label(meta: dict) -> str:
     return f"{path} · L{lines[0]}-{lines[1]}" if lines else path
 
 
+def _code_docs(docs: list[Document]) -> list[Document]:
+    """The retrieved code chunks, in the order they are numbered in the prompt ([1], [2], ...)."""
+    return [d for d in docs if d.metadata.get("source") != OVERVIEW_SOURCE]
+
+
 def format_context(docs: list[Document]) -> str:
     """
-    Turns retrieved Documents into a single text block for the prompt,
-    labeling each chunk with its source file (and line range) so the LLM can reference it.
+    Turns retrieved Documents into a single text block for the prompt.
+    Every code chunk gets a number ([1], [2], ...) so the LLM can cite exactly what it used;
+    the repository overview is included but not numbered (it is never shown as a citation).
     """
-    return "\n\n".join(f"[Source: {source_label(doc.metadata)}]\n{doc.page_content}" for doc in docs)
+    parts = [
+        f"[Repository overview]\n{d.page_content}"
+        for d in docs
+        if d.metadata.get("source") == OVERVIEW_SOURCE
+    ]
+    parts += [
+        f"[{i}] [Source: {source_label(d.metadata)}]\n{d.page_content}"
+        for i, d in enumerate(_code_docs(docs), start=1)
+    ]
+    return "\n\n".join(parts)
+
+
+# Citation markers in an answer: [2], [1][3] and also [1, 3]
+_CITE_MARK = re.compile(r"\[(\d{1,2}(?:\s*,\s*\d{1,2})*)\]")
+# Code inside the answer is ignored when looking for markers, so arr[2] is not read as a citation
+_CODE_IN_ANSWER = re.compile(r"```.*?```|`[^`\n]*`", re.DOTALL)
+
+
+def cited_numbers(answer: str) -> set[int]:
+    """The chunk numbers the answer actually cites, e.g. "... [2] ... [1, 3]" -> {1, 2, 3}."""
+    text = _CODE_IN_ANSWER.sub(" ", answer)
+    return {int(n) for group in _CITE_MARK.findall(text) for n in group.split(",")}
+
+
+def cited_docs(answer: str, docs: list[Document]) -> list[Document]:
+    """
+    Only the chunks the answer cited, so the source chips show what the answer really used.
+    If the model cited nothing valid, fall back to everything retrieved (better than showing no sources).
+    """
+    code = _code_docs(docs)
+    used = cited_numbers(answer)
+    picked = [d for i, d in enumerate(code, start=1) if i in used]
+    return picked or code
+
+
+def _strip_citation_marks(text: str) -> str:
+    """Earlier answers' [n] refer to an OLD context — remove them before sending history to the LLM."""
+    return _CITE_MARK.sub("", text)
 
 
 def _trim_history(history: list[ChatTurn] | None) -> list[ChatTurn]:
@@ -114,14 +161,15 @@ def _trim_history(history: list[ChatTurn] | None) -> list[ChatTurn]:
         else []
     )
     limit = settings.history_max_chars
-    return [
-        ChatTurn(
-            role=t.role,
-            content=t.content if len(t.content) <= limit else t.content[:limit] + " …",
-        )
-        for t in recent
-        if t.content.strip()
-    ]
+    trimmed = []
+    for t in recent:
+        content = _strip_citation_marks(t.content) if t.role == "assistant" else t.content
+        if not content.strip():
+            continue
+        if len(content) > limit:
+            content = content[:limit] + " …"
+        trimmed.append(ChatTurn(role=t.role, content=content))
+    return trimmed
 
 
 def _to_messages(history: list[ChatTurn]) -> list[BaseMessage]:
@@ -292,8 +340,9 @@ def answer_question(
         f"Calling LLM for question: '{question}' ({len(history)} history messages)"
     )
     answer = generate_answer(question, docs, history)
+    used = cited_docs(answer, docs)  # only what the answer actually cited
 
-    return {"answer": answer, "sources": _sources(docs), "citations": build_citations(docs)}
+    return {"answer": answer, "sources": _sources(used), "citations": build_citations(used)}
 
 
 def stream_answer(
@@ -320,6 +369,7 @@ def stream_answer(
         f"Streaming LLM answer for question: '{question}' ({len(history)} history messages)"
     )
     first = None
+    answer = ""
     for piece in _answer_chain().stream(
         {
             "context": format_context(docs),
@@ -330,7 +380,13 @@ def stream_answer(
         if piece:
             if first is None:
                 first = time.perf_counter()
+            answer += piece
             yield {"type": "token", "content": piece}
+    # second "sources" event: the frontend replaces the list it showed during streaming
+    # with only the chunks the finished answer actually cited
+    used = cited_docs(answer, docs)
+    yield {"type": "sources", "sources": _sources(used), "citations": build_citations(used)}
+
     end = time.perf_counter()
     logger.info(
         f"[timing] first token {1000 * ((first or end) - start):.0f} ms · total {1000 * (end - start):.0f} ms"

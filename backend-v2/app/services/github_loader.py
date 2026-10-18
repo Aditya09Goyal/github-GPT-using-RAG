@@ -1,9 +1,8 @@
 import os
 import shutil
 import stat
+import subprocess
 from pathlib import Path
-
-import git
 
 from app.core.config import settings
 from app.core.logging import get_logger
@@ -93,11 +92,14 @@ def _force_remove(func, path, exc):
     func(path)
 
 
+CLONE_TIMEOUT_SECONDS = 120  # a clone that takes longer than this is killed
+
+
 def clone_repo(repo_url: str, repo_name: str) -> Path:
     """
-    Clones a GitHub repo to a local folder under settings.repo_clone_dir.
-    If it already exists locally, deletes and re-clones (keeps it simple for now —
-    no incremental pull logic yet).
+    Shallow-clones a GitHub repo into settings.repo_clone_dir.
+    Runs git with a hard timeout, so a slow or stuck download can never block
+    the indexing worker forever. Any half-downloaded folder is deleted on failure.
     """
     dest = Path(settings.repo_clone_dir) / repo_name
 
@@ -108,11 +110,53 @@ def clone_repo(repo_url: str, repo_name: str) -> Path:
     dest.parent.mkdir(parents=True, exist_ok=True)
 
     logger.info(f"Cloning {repo_url} into {dest}")
-    git.Repo.clone_from(
-        repo_url, dest, depth=1
-    )  # depth=1 = shallow clone, don't need full history
+    try:
+        subprocess.run(
+            [
+                "git",
+                "clone",
+                "--depth",
+                "1",
+                "--single-branch",
+                "--no-tags",
+                "--",
+                repo_url,
+                str(dest),
+            ],
+            check=True,  # raise if git fails (e.g. repo not found)
+            timeout=CLONE_TIMEOUT_SECONDS,  # kill git if it takes too long
+            capture_output=True,
+            text=True,
+            # never stop and wait for a username/password (private or missing repo) — fail at once instead
+            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+        )
+    except subprocess.TimeoutExpired:
+        if dest.exists():
+            shutil.rmtree(dest, onexc=_force_remove)
+        raise RuntimeError(
+            f"Downloading the repo took longer than {CLONE_TIMEOUT_SECONDS} seconds — it is too big or GitHub is slow. Try again later."
+        )
+    except subprocess.CalledProcessError as e:
+        if dest.exists():
+            shutil.rmtree(dest, onexc=_force_remove)
+        logger.warning(f"git clone failed: {e.stderr.strip()}")
+        raise RuntimeError(
+            "Could not download the repo. Check that it exists and is public."
+        )
 
     return dest
+
+
+def get_commit_sha(repo_path: Path) -> str:
+    """The exact commit that was cloned (e.g. 'a1b2c3d…'), so citation links can point to that version."""
+    result = subprocess.run(
+        ["git", "-C", str(repo_path), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    return result.stdout.strip()
 
 
 def collect_files(repo_path: Path) -> list[Path]:
@@ -122,8 +166,18 @@ def collect_files(repo_path: Path) -> list[Path]:
     """
     collected = []
 
+    repo_root = repo_path.resolve()
+
     for path in repo_path.rglob("*"):
+        # 1) skip symlinks — a repo could link to server files like /proc/self/environ
+        if path.is_symlink():
+            continue
+
         if not path.is_file():
+            continue
+
+        # 2) extra safety: the real file must be inside the cloned repo folder
+        if not path.resolve().is_relative_to(repo_root):
             continue
 
         if any(ignored in path.parts for ignored in IGNORED_DIRS):
