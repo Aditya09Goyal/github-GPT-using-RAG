@@ -105,7 +105,7 @@ export default function IndexPanel({ user, onIndexed, onAuthExpired, autoFocus }
     const base: Repo = { name, url: `https://github.com/${parsed.owner}/${parsed.repo}`, owner: parsed.owner, repo: parsed.repo, indexedAt: Date.now() };
     try {
       const r = await indexRepo({ repo_url: base.url, collection_name: name }, setJob);
-      onIndexed({ ...base, files: r.files || undefined, chunks: r.chunks || undefined });
+      onIndexed({ ...base, name: r.collection_name, sha: r.commit_sha || undefined, files: r.files || undefined, chunks: r.chunks || undefined });
       setUrl("");
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
@@ -194,7 +194,7 @@ export default function IndexPanel({ user, onIndexed, onAuthExpired, autoFocus }
           <span className="text-warn">Paste a link like https://github.com/owner/repo</span>
         ) : parsed ? (
           <span className="text-muted animate-fadeIn">
-            Will be saved as <span className="font-mono text-text">{name}</span>
+            Ready to index <span className="font-mono text-text">{parsed.owner}/{parsed.repo}</span>
           </span>
         ) : null}
       </div>

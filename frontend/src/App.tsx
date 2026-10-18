@@ -88,7 +88,7 @@ export default function App() {
             const p = parseGithubUrl(r.url);
             if (!p) return [];
             const at = r.indexed_at ? Date.parse(r.indexed_at) : Date.now();
-            return [{ name: r.name, url: r.url, owner: p.owner, repo: p.repo, files: r.files || undefined, chunks: r.chunks || undefined, indexedAt: at }];
+            return [{ name: r.name, url: r.url, owner: p.owner, repo: p.repo, files: r.files || undefined, chunks: r.chunks || undefined, indexedAt: at, sha: r.commit_sha || undefined }];
           }),
         ),
       )
@@ -189,7 +189,7 @@ export default function App() {
       const job = await indexRepo({ repo_url: r.url, collection_name: name, force: true }, (j) =>
         set({ status: "running", stage: j.stage, pct: j.chunks ? Math.round((j.embedded / j.chunks) * 100) : 0 }),
       );
-      setRepos((list) => list.map((x) => (x.name === name ? { ...x, files: job.files || x.files, chunks: job.chunks || x.chunks, indexedAt: Date.now() } : x)));
+      setRepos((list) => list.map((x) => (x.name === name ? { ...x, files: job.files || x.files, chunks: job.chunks || x.chunks, indexedAt: Date.now(), sha: job.commit_sha || x.sha } : x)));
       set({ status: "done", stage: "Done", pct: 100 });
       toast.success(`${r.repo} re-indexed — line-level sources are ready ✨`);
     } catch (e) {

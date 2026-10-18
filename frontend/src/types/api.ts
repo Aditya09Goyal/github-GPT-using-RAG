@@ -16,6 +16,7 @@ export interface IndexJob {
   embedded: number;
   error: string | null;
   started_at: number;
+  commit_sha?: string | null; // the exact commit that was indexed
 }
 
 export interface ChatTurn {
@@ -86,4 +87,5 @@ export interface Repo {
   files?: number;
   chunks?: number;
   indexedAt: number;
+  sha?: string; // the exact commit that was indexed — file links use it instead of HEAD
 }

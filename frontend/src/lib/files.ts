@@ -6,7 +6,7 @@ import { rawFileUrl } from "./repo";
 const texts = new Map<string, string>();
 const pending = new Map<string, Promise<string>>();
 
-const keyOf = (repo: Repo, path: string) => `${repo.name}:${path}`;
+const keyOf = (repo: Repo, path: string) => `${repo.name}@${repo.sha ?? "HEAD"}:${path}`; // new commit = fresh fetch
 
 export const cachedFile = (repo: Repo, path: string): string | null => texts.get(keyOf(repo, path)) ?? null;
 

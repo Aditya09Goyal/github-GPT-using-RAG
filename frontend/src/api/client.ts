@@ -57,7 +57,7 @@ export async function indexRepo(body: IndexRepoRequest, onProgress: (job: IndexJ
     if (job.status === "failed") throw new ApiError(job.error ?? "Indexing failed.", 500);
     await sleep(2000);
     try {
-      job = await indexStatus(body.collection_name);
+      job = await indexStatus(job.collection_name);
       misses = 0;
     } catch (e) {
       // a 404 means the server lost the job (restarted); network blips are retried a few times
@@ -80,6 +80,7 @@ export interface ServerRepo {
   files: number;
   chunks: number;
   indexed_at: string | null;
+  commit_sha: string | null;
 }
 
 // the signed-in user's own repo list
